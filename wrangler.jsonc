@@ -1,0 +1,73 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "terremoto-venezuela",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-06-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+  },
+  "observability": {
+    "enabled": true,
+  },
+  "vars": {
+    "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "terremoto-reports-local",
+      "database_id": "local",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "REPORT_IMAGES",
+      "bucket_name": "terremoto-report-images-local",
+    },
+  ],
+  "env": {
+    "preview": {
+      "name": "terremoto-venezuela-preview",
+      "vars": {
+        "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "0x4AAAAAADrDYTqa1Y-4N0AN",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "terremoto-reports-preview",
+          "database_id": "fdfb6474-9209-48a2-a6fc-4acc928dbbb3",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "REPORT_IMAGES",
+          "bucket_name": "terremoto-report-images-preview",
+        },
+      ],
+    },
+    "production": {
+      "name": "terremoto-venezuela",
+      "vars": {
+        "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "0x4AAAAAADrDYTqa1Y-4N0AN",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "terremoto-reports",
+          "database_id": "589c8325-dda2-404c-b598-79456c8f3c67",
+          "migrations_dir": "migrations",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "REPORT_IMAGES",
+          "bucket_name": "terremoto-report-images",
+        },
+      ],
+    },
+  },
+}

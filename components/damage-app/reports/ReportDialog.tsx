@@ -1,0 +1,559 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  Camera,
+  Images,
+  LocateFixed,
+  MapPin,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
+import PhoneInput, {
+  type Value as PhoneNumberValue,
+} from "react-phone-number-input";
+import phoneInputLabels from "react-phone-number-input/locale/es";
+
+import {
+  contactPhoneCountries,
+  damageLabels,
+} from "@/components/damage-app/constants";
+import { DamageMapClient } from "@/components/damage-app/map/DamageMapClient";
+import {
+  emptyReportDraft,
+  type ReportCreatedHandler,
+  type ReportDraft,
+} from "@/components/damage-app/types";
+import { TurnstileWidget } from "@/components/turnstile-widget";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import type { ProcessedImage } from "@/lib/process-images";
+import { damageTypes, reportInputSchema } from "@/lib/report-schema";
+import { cn } from "@/lib/utils";
+
+const ReportLocationFields = dynamic(
+  () =>
+    import("./ReportLocationFields").then(
+      (module) => module.ReportLocationFields
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="location-fields-loading">Cargando ubicación…</div>
+    ),
+  }
+);
+
+export function ReportDialog({
+  compact = false,
+  onCreated,
+}: {
+  compact?: boolean;
+  onCreated: ReportCreatedHandler;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<ReportDraft>(emptyReportDraft);
+  const [images, setImages] = useState<ProcessedImage[]>([]);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileReset, setTurnstileReset] = useState(0);
+  const [selectingLocation, setSelectingLocation] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [locationFieldsKey, setLocationFieldsKey] = useState(0);
+  const [processing, setProcessing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const imagesRef = useRef<ProcessedImage[]>([]);
+  const latitude = Number(draft.latitude);
+  const longitude = Number(draft.longitude);
+  const selectedPosition =
+    draft.latitude !== "" &&
+    draft.longitude !== "" &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+      ? { latitude, longitude }
+      : null;
+
+  const setToken = useCallback((token: string) => setTurnstileToken(token), []);
+
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((image) =>
+        URL.revokeObjectURL(image.previewUrl)
+      );
+    };
+  }, []);
+
+  function updateDraft<K extends keyof ReportDraft>(
+    field: K,
+    value: ReportDraft[K]
+  ) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function selectLocation(latitude: number, longitude: number) {
+    setDraft((current) => ({
+      ...current,
+      latitude: latitude.toFixed(6),
+      longitude: longitude.toFixed(6),
+    }));
+    setSelectingLocation(false);
+  }
+
+  function useCurrentLocation() {
+    setError("");
+    if (!navigator.geolocation) {
+      setError("Este navegador no permite obtener tu ubicación.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        selectLocation(position.coords.latitude, position.coords.longitude);
+        setLocating(false);
+      },
+      () => {
+        setError("No fue posible obtener tu ubicación.");
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }
+
+  async function addImages(files: FileList | null) {
+    if (!files?.length) return;
+    if (images.length + files.length > 5) {
+      setError("Solo puedes adjuntar hasta 5 imágenes.");
+      return;
+    }
+    setProcessing(true);
+    setError("");
+    try {
+      const { processImage } = await import("@/lib/process-images");
+      const processed: ProcessedImage[] = [];
+      for (const file of Array.from(files)) {
+        processed.push(await processImage(file));
+      }
+      setImages((current) => [...current, ...processed]);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo procesar la imagen."
+      );
+    } finally {
+      setProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
+    }
+  }
+
+  function removeImage(id: string) {
+    setImages((current) => {
+      const removed = current.find((image) => image.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((image) => image.id !== id);
+    });
+  }
+
+  async function submitReport() {
+    setError("");
+    setSuccess("");
+    const validation = reportInputSchema.safeParse({
+      ...draft,
+      turnstileToken,
+    });
+    if (!validation.success) {
+      setError(
+        validation.error.issues[0]?.message ?? "Revisa los campos obligatorios."
+      );
+      return;
+    }
+    if (!images.length) {
+      setError("Adjunta al menos una foto del daño.");
+      return;
+    }
+
+    const formData = new FormData();
+    for (const [key, value] of Object.entries(draft)) {
+      formData.set(key, String(value));
+    }
+    formData.set("turnstileToken", turnstileToken);
+    images.forEach((image) => formData.append("images", image.file));
+
+    setSubmitting(true);
+    try {
+      const response = await fetch("/api/reports", {
+        method: "POST",
+        body: formData,
+      });
+      const result = (await response.json()) as {
+        report?: Parameters<ReportCreatedHandler>[0];
+        error?: string;
+      };
+      if (!response.ok || !result.report) {
+        throw new Error(result.error ?? "No se pudo enviar el reporte.");
+      }
+      onCreated(result.report);
+      setSuccess("Reporte publicado correctamente.");
+      setDraft(emptyReportDraft);
+      setLocationFieldsKey((current) => current + 1);
+      images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      setImages([]);
+      setTurnstileToken("");
+      setTurnstileReset((current) => current + 1);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo enviar el reporte."
+      );
+      setTurnstileToken("");
+      setTurnstileReset((current) => current + 1);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            id={compact ? undefined : "reportar"}
+            className={cn("report-button", compact && "report-button-compact")}
+            size="lg"
+          />
+        }
+      >
+        <MapPin data-icon="inline-start" />
+        Crear reporte
+      </DialogTrigger>
+      <DialogContent className="report-dialog sm:max-w-3xl">
+        <DialogHeader className="report-dialog-header">
+          <p className="eyebrow eyebrow-light">Nuevo reporte público</p>
+          <DialogTitle>Cuéntanos qué ves</DialogTitle>
+          <DialogDescription>
+            Registra el daño desde un lugar seguro. Los campos con * son
+            obligatorios.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="report-form">
+          <div className="contact-grid">
+            <label>
+              <span>Edificio o estructura *</span>
+              <Input
+                value={draft.buildingName}
+                onChange={(event) =>
+                  updateDraft("buildingName", event.target.value)
+                }
+                placeholder="Ej. Edificio Las Acacias"
+              />
+            </label>
+            <ReportLocationFields
+              key={locationFieldsKey}
+              resetKey={locationFieldsKey}
+              onStateChange={(state) => updateDraft("state", state)}
+              onCityChange={(city) => updateDraft("city", city)}
+            />
+          </div>
+          <label>
+            <span>Dirección *</span>
+            <Input
+              value={draft.address}
+              onChange={(event) => updateDraft("address", event.target.value)}
+              placeholder="Av., calle, urbanización y referencia"
+              autoComplete="street-address"
+            />
+          </label>
+          <div className="form-actions">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={useCurrentLocation}
+              disabled={locating}
+            >
+              <LocateFixed data-icon="inline-start" />
+              {locating ? "Obteniendo ubicación…" : "Usar mi ubicación"}
+            </Button>
+            <Button
+              type="button"
+              variant={selectingLocation ? "default" : "outline"}
+              onClick={() => setSelectingLocation((current) => !current)}
+            >
+              {selectingLocation ? "Haz clic en el mapa" : "Elegir en el mapa"}
+            </Button>
+          </div>
+          <div className="coordinates-grid">
+            <label>
+              <span>Latitud *</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={-90}
+                max={90}
+                step="any"
+                value={draft.latitude}
+                onChange={(event) =>
+                  updateDraft("latitude", event.target.value)
+                }
+                placeholder="Ej. 10.480594"
+              />
+            </label>
+            <label>
+              <span>Longitud *</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={-180}
+                max={180}
+                step="any"
+                value={draft.longitude}
+                onChange={(event) =>
+                  updateDraft("longitude", event.target.value)
+                }
+                placeholder="Ej. -66.903603"
+              />
+            </label>
+          </div>
+          <p className="field-help location-help" aria-live="polite">
+            {selectedPosition
+              ? `Pin ubicado en ${draft.latitude}, ${draft.longitude}. Verifica o ajusta la posición en el mapa.`
+              : "Ingresa ambas coordenadas, usa tu ubicación o elige un punto en el mapa."}
+          </p>
+          <div className={cn("location-picker", selectingLocation && "active")}>
+            <DamageMapClient
+              selecting={selectingLocation}
+              selectedPosition={selectedPosition}
+              onSelect={selectLocation}
+            />
+          </div>
+          <fieldset>
+            <legend>Fotos del daño *</legend>
+            <input
+              id="report-photo-library"
+              ref={fileInputRef}
+              className="sr-only"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(event) => addImages(event.target.files)}
+            />
+            <input
+              id="report-photo-camera"
+              ref={cameraInputRef}
+              className="sr-only"
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(event) => addImages(event.target.files)}
+            />
+            <label
+              className={cn(
+                "photo-upload",
+                (processing || images.length >= 5) && "disabled"
+              )}
+              htmlFor={
+                processing || images.length >= 5
+                  ? undefined
+                  : "report-photo-library"
+              }
+            >
+              <Images aria-hidden="true" />
+              <span>
+                <strong>
+                  {processing
+                    ? "Preparando fotos…"
+                    : images.length
+                      ? "Agregar más fotos"
+                      : "Seleccionar fotos"}
+                </strong>
+                <small>Elige una o varias imágenes de tu teléfono</small>
+              </span>
+            </label>
+            <div className="photo-upload-actions">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={processing || images.length >= 5}
+                onClick={() => cameraInputRef.current?.click()}
+              >
+                <Camera data-icon="inline-start" />
+                Tomar una foto
+              </Button>
+              <small aria-live="polite">
+                {images.length}/5 fotos · máximo 10 MB por foto
+              </small>
+            </div>
+            {images.length ? (
+              <div className="image-preview-grid">
+                {images.map((image) => (
+                  <div key={image.id}>
+                    {/* Blob URLs cannot use the Next image optimizer. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={image.previewUrl} alt="Vista previa del daño" />
+                    <button
+                      type="button"
+                      aria-label="Eliminar imagen"
+                      onClick={() => removeImage(image.id)}
+                    >
+                      <Trash2 />
+                    </button>
+                    <span>{Math.round(image.file.size / 1024)} KB</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </fieldset>
+          <fieldset>
+            <legend>Tipo de daño *</legend>
+            <div className="severity-options">
+              {damageTypes.map((type) => (
+                <button
+                  className={cn(draft.damageType === type && "selected")}
+                  type="button"
+                  key={type}
+                  onClick={() => updateDraft("damageType", type)}
+                >
+                  {damageLabels[type]}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label
+            className={cn("help-needed-field", draft.needsHelp && "selected")}
+          >
+            <input
+              type="checkbox"
+              checked={draft.needsHelp}
+              onChange={(event) =>
+                updateDraft("needsHelp", event.target.checked)
+              }
+            />
+            <span className="help-needed-icon">
+              <ShieldAlert aria-hidden="true" />
+            </span>
+            <span>
+              <strong>Se necesita ayuda</strong>
+              <small>
+                Selecciona esta opción solo en una emergencia: personas
+                atrapadas bajo escombros, heridos o una situación que requiera
+                rescatistas o equipos de voluntarios.
+              </small>
+            </span>
+          </label>
+          <label>
+            <span>Descripción *</span>
+            <Textarea
+              value={draft.description}
+              onChange={(event) =>
+                updateDraft("description", event.target.value)
+              }
+              rows={4}
+              placeholder="Describe los daños visibles y cualquier riesgo inmediato."
+            />
+          </label>
+          <div>
+            <strong>Contacto público (opcional)</strong>
+            <p className="field-help">
+              Estos datos aparecerán en el reporte para que otras personas
+              puedan contactarte.
+            </p>
+          </div>
+          <div className="contact-grid">
+            <Input
+              value={draft.contactName}
+              onChange={(event) =>
+                updateDraft("contactName", event.target.value)
+              }
+              placeholder="Nombre"
+            />
+            <PhoneInput
+              className="contact-phone"
+              value={
+                (draft.contactPhone || undefined) as
+                  | PhoneNumberValue
+                  | undefined
+              }
+              onChange={(value) =>
+                updateDraft("contactPhone", value?.toString() ?? "")
+              }
+              defaultCountry="VE"
+              countries={contactPhoneCountries}
+              labels={phoneInputLabels}
+              international
+              countryCallingCodeEditable={false}
+              limitMaxLength
+              autoComplete="tel"
+              placeholder="Teléfono o WhatsApp"
+            />
+            <Input
+              className="contact-email"
+              value={draft.contactEmail}
+              onChange={(event) =>
+                updateDraft("contactEmail", event.target.value)
+              }
+              placeholder="Correo electrónico"
+              type="email"
+            />
+          </div>
+          <label className="consent-field">
+            <input
+              type="checkbox"
+              checked={draft.contactConsent}
+              onChange={(event) =>
+                updateDraft("contactConsent", event.target.checked)
+              }
+            />
+            <span>
+              Autorizo la publicación de los datos de contacto que proporcioné.
+            </span>
+          </label>
+          <TurnstileWidget onToken={setToken} resetKey={turnstileReset} />
+          {error ? <p className="form-message form-error">{error}</p> : null}
+          {success ? (
+            <p className="form-message form-success">{success}</p>
+          ) : null}
+        </div>
+        <DialogFooter className="report-dialog-footer !px-10">
+          <p>
+            El reporte se publicará inmediatamente después de validarse. Por
+            favor asegúrate de haber agregado la información correcta al momento
+            de hacer el reporte.
+          </p>
+          <div className="form-actions">
+            <DialogClose render={<Button variant="outline" />}>
+              Cerrar
+            </DialogClose>
+            <Button
+              onClick={submitReport}
+              disabled={submitting || processing || !turnstileToken}
+            >
+              {submitting ? "Publicando…" : "Enviar reporte →"}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
