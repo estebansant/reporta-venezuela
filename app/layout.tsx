@@ -2,12 +2,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteShellHeader } from "@/components/site-shell-header";
+import { getSiteUrl } from "@/lib/site-url";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
-const siteUrl = new URL(
-  process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
-);
+const siteUrl = new URL(getSiteUrl());
 
 const geist = Geist({
   variable: "--font-geist",

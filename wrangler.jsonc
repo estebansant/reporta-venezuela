@@ -15,6 +15,7 @@
 	},
 	"vars": {
 		"NEXT_PUBLIC_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+		"NEXT_PUBLIC_SITE_URL": "https://reportavenezuela.org",
 	},
 	"d1_databases": [
 		{
@@ -35,6 +36,7 @@
 			"name": "terremoto-venezuela-preview",
 			"vars": {
 				"NEXT_PUBLIC_TURNSTILE_SITE_KEY": "0x4AAAAAADrDYTqa1Y-4N0AN",
+				"NEXT_PUBLIC_SITE_URL": "https://reportavenezuela.org",
 			},
 			"d1_databases": [
 				{
@@ -55,6 +57,7 @@
 			"name": "terremoto-venezuela",
 			"vars": {
 				"NEXT_PUBLIC_TURNSTILE_SITE_KEY": "0x4AAAAAADrDYTqa1Y-4N0AN",
+				"NEXT_PUBLIC_SITE_URL": "https://reportavenezuela.org",
 			},
 			"d1_databases": [
 				{
