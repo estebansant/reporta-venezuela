@@ -11,14 +11,24 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 
-import type { PublicReport } from "@/lib/report-schema";
+import type { DamageType, PublicReport } from "@/lib/report-schema";
 
-const markerIcon = L.divIcon({
-  className: "damage-marker",
-  html: "<span></span>",
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-});
+function damageDivIcon(modifier: string) {
+  return L.divIcon({
+    className: `damage-marker ${modifier}`,
+    html: "<span></span>",
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+  });
+}
+
+// Pin colour mirrors the damage tag colour shown on report cards.
+const damageMarkerIcons: Record<DamageType, L.DivIcon> = {
+  cracks: damageDivIcon("damage-marker-cracks"),
+  moderate: damageDivIcon("damage-marker-moderate"),
+  severe: damageDivIcon("damage-marker-severe"),
+  collapse: damageDivIcon("damage-marker-collapse"),
+};
 
 const needsHelpMarkerIcon = L.divIcon({
   className: "damage-marker damage-marker-needs-help",
@@ -123,7 +133,11 @@ export function DamageMap({
         <Marker
           key={report.id}
           position={[report.latitude, report.longitude]}
-          icon={report.needsHelp ? needsHelpMarkerIcon : markerIcon}
+          icon={
+            report.needsHelp
+              ? needsHelpMarkerIcon
+              : damageMarkerIcons[report.damageType]
+          }
         >
           <Popup>
             {report.needsHelp ? (

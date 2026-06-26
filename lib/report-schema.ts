@@ -51,7 +51,7 @@ export const reportInputSchema = z
 
 export const reportQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(24),
+  pageSize: z.coerce.number().int().min(1).max(500).default(24),
   search: z.string().trim().max(120).optional(),
   state: z.string().trim().max(80).optional(),
   damageType: z.enum(damageTypes).optional(),

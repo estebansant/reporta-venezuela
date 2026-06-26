@@ -10,6 +10,7 @@
     "deploy": "pnpm build:cloudflare && opennextjs-cloudflare deploy --env production",
     "deploy:preview": "pnpm build:cloudflare && opennextjs-cloudflare deploy --env preview",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "db:pull:production": "bash scripts/pull-prod-db.sh",
     "db:migrate:local": "wrangler d1 migrations apply terremoto-reports-local --local",
     "db:migrate:preview": "wrangler d1 migrations apply terremoto-reports-preview --remote --env preview",
     "db:migrate:production": "wrangler d1 migrations apply terremoto-reports --remote --env production",

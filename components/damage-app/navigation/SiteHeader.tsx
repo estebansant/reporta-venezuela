@@ -18,6 +18,7 @@ export function SiteHeader({ onCreated }: { onCreated: ReportCreatedHandler }) {
             </a>
           ))}
           <Link href="/infografias">Infografías</Link>
+          <Link href="/centros-de-acopio">Centros de acopio</Link>
           <Link href="/personas-desaparecidas">Personas desaparecidas</Link>
           <Link href="/emergencias">Emergencias</Link>
         </nav>

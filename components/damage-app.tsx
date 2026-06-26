@@ -14,8 +14,13 @@ import { MissionStrip } from "@/components/damage-app/sections/MissionStrip";
 import { REPORT_CREATED_EVENT } from "@/components/site-shell-header";
 import type { DamageType, PublicReport } from "@/lib/report-schema";
 
+// Map shows every report within the current viewport, so request a high cap
+// instead of paginating the pins.
+const MAP_PAGE_SIZE = 500;
+
 export function DamageApp() {
   const [reports, setReports] = useState<PublicReport[]>([]);
+  const [mapReports, setMapReports] = useState<PublicReport[]>([]);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [damageType, setDamageType] = useState<"all" | DamageType>("all");
@@ -27,6 +32,7 @@ export function DamageApp() {
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [mapLoading, setMapLoading] = useState(true);
 
   useEffect(() => {
     const mobile = window.matchMedia("(max-width: 767px)");
@@ -51,6 +57,8 @@ export function DamageApp() {
     };
   }, []);
 
+  // Directory ignores the map viewport on purpose: every report must be
+  // reachable regardless of where the map is panned or zoomed.
   const loadReports = useCallback(async () => {
     if (pageSize === null) return;
     const params = new URLSearchParams({
@@ -60,11 +68,6 @@ export function DamageApp() {
     if (deferredSearch) params.set("search", deferredSearch);
     if (damageType !== "all") params.set("damageType", damageType);
     if (state !== "all") params.set("state", state);
-    if (bounds) {
-      new URLSearchParams(bounds).forEach((value, key) =>
-        params.set(key, value)
-      );
-    }
     setLoading(true);
     try {
       const response = await fetch(`/api/reports?${params}`, {
@@ -89,16 +92,54 @@ export function DamageApp() {
     } finally {
       setLoading(false);
     }
-  }, [bounds, damageType, deferredSearch, page, pageSize, state]);
+  }, [damageType, deferredSearch, page, pageSize, state]);
 
   useEffect(() => {
     const timeout = window.setTimeout(loadReports, 250);
     return () => window.clearTimeout(timeout);
   }, [loadReports]);
 
+  // Map pins follow the viewport (bounds) plus the active filters.
+  const loadMapReports = useCallback(async () => {
+    const params = new URLSearchParams({
+      page: "1",
+      pageSize: String(MAP_PAGE_SIZE),
+    });
+    if (deferredSearch) params.set("search", deferredSearch);
+    if (damageType !== "all") params.set("damageType", damageType);
+    if (state !== "all") params.set("state", state);
+    if (bounds) {
+      new URLSearchParams(bounds).forEach((value, key) =>
+        params.set(key, value)
+      );
+    }
+    setMapLoading(true);
+    try {
+      const response = await fetch(`/api/reports?${params}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) throw new Error("No se pudieron cargar los reportes.");
+      const result = (await response.json()) as { reports: PublicReport[] };
+      setMapReports(result.reports);
+    } catch {
+      // Map pins are best-effort; the directory surfaces load errors instead.
+    } finally {
+      setMapLoading(false);
+    }
+  }, [bounds, damageType, deferredSearch, state]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(loadMapReports, 250);
+    return () => window.clearTimeout(timeout);
+  }, [loadMapReports]);
+
   const handleReportCreated = useCallback((report: PublicReport) => {
     setPage(1);
     setReports((current) => [
+      report,
+      ...current.filter((item) => item.id !== report.id),
+    ]);
+    setMapReports((current) => [
       report,
       ...current.filter((item) => item.id !== report.id),
     ]);
@@ -122,10 +163,12 @@ export function DamageApp() {
     setReports((current) =>
       current.map((item) => (item.id === report.id ? report : item))
     );
+    setMapReports((current) =>
+      current.map((item) => (item.id === report.id ? report : item))
+    );
   }, []);
 
   const handleBoundsChange = useCallback((nextBounds: string) => {
-    setPage(1);
     setBounds(nextBounds);
   }, []);
 
@@ -137,16 +180,16 @@ export function DamageApp() {
   }, []);
 
   const affectedStates = useMemo(
-    () => new Set(reports.map((report) => report.state)).size,
-    [reports]
+    () => new Set(mapReports.map((report) => report.state)).size,
+    [mapReports]
   );
 
   return (
     <main>
       <MissionStrip />
       <MapSection
-        reports={reports}
-        loading={loading}
+        reports={mapReports}
+        loading={mapLoading}
         affectedStates={affectedStates}
         onBoundsChange={handleBoundsChange}
         onCreated={handleReportCreated}

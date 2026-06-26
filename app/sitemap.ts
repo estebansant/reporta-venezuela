@@ -6,6 +6,7 @@ const siteUrl = getSiteUrl();
 const routes = [
   { path: "", changeFrequency: "daily", priority: 1 },
   { path: "/emergencias", changeFrequency: "weekly", priority: 0.9 },
+  { path: "/centros-de-acopio", changeFrequency: "daily", priority: 0.9 },
   {
     path: "/personas-desaparecidas",
     changeFrequency: "daily",

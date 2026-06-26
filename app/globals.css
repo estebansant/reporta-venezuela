@@ -1371,6 +1371,18 @@ footer nav {
   border-radius: 50%;
   background: white;
 }
+.damage-marker-cracks {
+  background: #8a6a24;
+}
+.damage-marker-moderate {
+  background: #b45309;
+}
+.damage-marker-severe {
+  background: #b53a24;
+}
+.damage-marker-collapse {
+  background: #7f1d1d;
+}
 .damage-marker-needs-help {
   border-color: #fff7ed;
   background: #991b1b;

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowUpRight, Lightbulb, Phone } from "lucide-react";
+import { ArrowUpRight, HandHelping, Lightbulb, Phone } from "lucide-react";
 
 const resources = [
   {
@@ -15,6 +15,13 @@ const resources = [
     title: "Teléfonos de emergencia",
     description: "Directorio nacional y contactos confirmados por ciudad.",
     icon: Phone,
+  },
+  {
+    href: "/centros-de-acopio",
+    eyebrow: "Ayuda humanitaria",
+    title: "Centros de acopio",
+    description: "Directorio externo de puntos de recolección y apoyo.",
+    icon: HandHelping,
   },
 ] as const;
 

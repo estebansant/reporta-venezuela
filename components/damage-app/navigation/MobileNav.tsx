@@ -51,6 +51,12 @@ export function MobileNav({ onCreated }: { onCreated: ReportCreatedHandler }) {
           </SheetClose>
           <SheetClose
             nativeButton={false}
+            render={<Link href="/centros-de-acopio" className="mobile-nav-link" />}
+          >
+            Centros de acopio
+          </SheetClose>
+          <SheetClose
+            nativeButton={false}
             render={<Link href="/personas-desaparecidas" className="mobile-nav-link" />}
           >
             Personas desaparecidas
