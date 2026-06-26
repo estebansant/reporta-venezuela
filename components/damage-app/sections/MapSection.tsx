@@ -1,18 +1,20 @@
 import { DamageMapClient } from "@/components/damage-app/map/DamageMapClient";
 import { ReportDialog } from "@/components/damage-app/reports/ReportDialog";
 import type { ReportCreatedHandler } from "@/components/damage-app/types";
-import type { PublicReport } from "@/lib/report-schema";
+import type { MapItem } from "@/lib/report-schema";
 
 export function MapSection({
   reports,
   loading,
   affectedStates,
+  visibleReportCount,
   onBoundsChange,
   onCreated,
 }: {
-  reports: PublicReport[];
+  reports: MapItem[];
   loading: boolean;
   affectedStates: number;
+  visibleReportCount: number;
   onBoundsChange: (bounds: string) => void;
   onCreated: ReportCreatedHandler;
 }) {
@@ -43,7 +45,7 @@ export function MapSection({
           </p>
           <div className="stats-grid">
             <div>
-              <strong>{reports.length}</strong>
+              <strong>{visibleReportCount}</strong>
               <span>reportes visibles</span>
             </div>
             <div>

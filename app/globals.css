@@ -626,6 +626,36 @@ a {
   width: 13px;
   height: 13px;
 }
+.report-gallery .satellite-verified-badge {
+  top: auto;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: calc(100% - 1.5rem);
+  width: fit-content;
+  white-space: nowrap;
+  background: #2563eb;
+  color: #fff7ed;
+}
+.report-gallery .satellite-verified-badge svg {
+  width: 13px;
+  height: 13px;
+}
+.map-popup-chip {
+  width: 100%;
+  margin-top: 0.4rem;
+  border-radius: 6px;
+}
+.map-satellite-verified {
+  display: inline-block;
+  margin-top: 0.2rem;
+  color: #2563eb;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
 .report-carousel-previous,
 .report-carousel-next {
   z-index: 3;
@@ -1183,6 +1213,9 @@ footer nav {
   color: #68717c;
   font-size: 0.68rem;
 }
+.field-error {
+  color: #b42318;
+}
 .location-fields-loading {
   grid-column: 1 / -1;
   min-height: 3.55rem;
@@ -1500,6 +1533,10 @@ footer nav {
 .contact-phone:focus-within {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+}
+.contact-phone-error {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgb(220 38 38 / 0.14);
 }
 .contact-phone .PhoneInputInput {
   min-width: 0;

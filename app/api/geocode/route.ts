@@ -1,5 +1,14 @@
+import {
+  checkRateLimit,
+  jsonHeaders,
+  rateLimitResponse,
+} from "@/lib/api-protection";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const GEOCODE_CACHE_CONTROL =
+  "public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800";
 
 type NominatimResult = {
   lat?: string;
@@ -11,7 +20,10 @@ function getSearchParam(url: URL, key: string) {
 }
 
 function badRequest(message: string) {
-  return Response.json({ error: message }, { status: 400 });
+  return Response.json(
+    { error: message },
+    { status: 400, headers: jsonHeaders({ "Cache-Control": "no-store" }) },
+  );
 }
 
 function parseCoordinate(value: string | undefined, min: number, max: number) {
@@ -41,6 +53,13 @@ async function searchNominatim(params: URLSearchParams) {
 }
 
 export async function GET(request: Request) {
+  const rateLimit = checkRateLimit(request, {
+    namespace: "geocode:get",
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfter);
+
   const url = new URL(request.url);
   const address = getSearchParam(url, "address");
   const city = getSearchParam(url, "city");
@@ -78,7 +97,7 @@ export async function GET(request: Request) {
   } catch {
     return Response.json(
       { error: "No fue posible buscar la dirección en el mapa." },
-      { status: 502 },
+      { status: 502, headers: jsonHeaders({ "Cache-Control": "no-store" }) },
     );
   }
 
@@ -87,8 +106,14 @@ export async function GET(request: Request) {
   const longitude = parseCoordinate(first?.lon, -180, 180);
 
   if (latitude === null || longitude === null) {
-    return Response.json({ found: false });
+    return Response.json(
+      { found: false },
+      { headers: jsonHeaders({ "Cache-Control": GEOCODE_CACHE_CONTROL }) },
+    );
   }
 
-  return Response.json({ found: true, latitude, longitude });
+  return Response.json(
+    { found: true, latitude, longitude },
+    { headers: jsonHeaders({ "Cache-Control": GEOCODE_CACHE_CONTROL }) },
+  );
 }

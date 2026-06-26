@@ -17,6 +17,7 @@ interface ReportRow {
   contact_phone: string | null;
   contact_email: string | null;
   created_at: string;
+  verified_by_satellite: number;
   image_id: string | null;
   image_width: number | null;
   image_height: number | null;
@@ -43,6 +44,7 @@ export function rowsToReports(rows: ReportRow[]): PublicReport[] {
         contactPhone: row.contact_phone,
         contactEmail: row.contact_email,
         createdAt: row.created_at,
+        verifiedBySatellite: row.verified_by_satellite === 1,
         images: [],
       };
       reports.set(row.id, report);

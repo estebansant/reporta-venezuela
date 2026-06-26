@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Check, LoaderCircle, ShieldAlert, X } from "lucide-react";
+import { Check, LoaderCircle, SatelliteDish, ShieldAlert, X } from "lucide-react";
 import { useState } from "react";
 
 import { damageLabels } from "@/components/damage-app/constants";
@@ -104,6 +104,12 @@ function ReportGallery({
         <Badge className="needs-help-badge">
           <ShieldAlert aria-hidden="true" />
           Se necesita ayuda
+        </Badge>
+      ) : null}
+      {report.verifiedBySatellite ? (
+        <Badge className="satellite-verified-badge">
+          <SatelliteDish aria-hidden="true" />
+          Verificado satélite
         </Badge>
       ) : null}
     </div>

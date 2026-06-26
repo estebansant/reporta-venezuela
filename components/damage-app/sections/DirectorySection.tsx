@@ -36,7 +36,7 @@ export function DirectorySection({
   reports,
   search,
   state,
-  damageType,
+  damageTypes: selectedDamageTypes,
   page,
   pageSize,
   total,
@@ -45,7 +45,7 @@ export function DirectorySection({
   loadError,
   onSearchChange,
   onStateChange,
-  onDamageTypeChange,
+  onDamageTypesChange,
   onPageChange,
   onRetry,
   onCreated,
@@ -54,7 +54,7 @@ export function DirectorySection({
   reports: PublicReport[];
   search: string;
   state: string;
-  damageType: "all" | DamageType;
+  damageTypes: DamageType[];
   page: number;
   pageSize: number;
   total: number;
@@ -63,7 +63,7 @@ export function DirectorySection({
   loadError: string;
   onSearchChange: (search: string) => void;
   onStateChange: (state: string) => void;
-  onDamageTypeChange: (damageType: "all" | DamageType) => void;
+  onDamageTypesChange: (damageTypes: DamageType[]) => void;
   onPageChange: (page: number) => void;
   onRetry: () => void;
   onCreated: ReportCreatedHandler;
@@ -72,6 +72,15 @@ export function DirectorySection({
   const pageNumbers = getPageNumbers(page, totalPages);
   const firstResult = total ? (page - 1) * pageSize + 1 : 0;
   const lastResult = Math.min(page * pageSize, total);
+  const selectedDamageTypeSet = new Set(selectedDamageTypes);
+
+  function toggleDamageType(type: DamageType) {
+    if (selectedDamageTypeSet.has(type)) {
+      onDamageTypesChange(selectedDamageTypes.filter((item) => item !== type));
+      return;
+    }
+    onDamageTypesChange([...selectedDamageTypes, type]);
+  }
 
   return (
     <section className="directory section-pad" id="directorio">
@@ -111,18 +120,18 @@ export function DirectorySection({
       </div>
       <div className="filter-row">
         <Button
-          variant={damageType === "all" ? "default" : "outline"}
+          variant={selectedDamageTypes.length === 0 ? "default" : "outline"}
           size="sm"
-          onClick={() => onDamageTypeChange("all")}
+          onClick={() => onDamageTypesChange([])}
         >
           Todos
         </Button>
         {damageTypes.map((type) => (
           <Button
             key={type}
-            variant={damageType === type ? "default" : "outline"}
+            variant={selectedDamageTypeSet.has(type) ? "default" : "outline"}
             size="sm"
-            onClick={() => onDamageTypeChange(type)}
+            onClick={() => toggleDamageType(type)}
           >
             {damageLabels[type]}
           </Button>

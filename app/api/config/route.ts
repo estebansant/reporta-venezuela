@@ -1,3 +1,4 @@
+import { jsonHeaders } from "@/lib/api-protection";
 import { getCloudflareEnv } from "@/lib/cloudflare";
 
 export const runtime = "nodejs";
@@ -12,9 +13,9 @@ export async function GET() {
         "1x00000000000000000000AA",
     },
     {
-      headers: {
-        "Cache-Control": "public, max-age=300",
-      },
+      headers: jsonHeaders({
+        "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
+      }),
     },
   );
 }

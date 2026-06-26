@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { reportInputSchema, reportQuerySchema } from "./report-schema";
+import {
+  mapReportQuerySchema,
+  reportInputSchema,
+  reportQuerySchema,
+} from "./report-schema";
 
 const validReport = {
   buildingName: "Edificio Las Acacias",
@@ -75,7 +79,50 @@ describe("reportQuerySchema", () => {
     expect(reportQuerySchema.parse({})).toMatchObject({ page: 1, pageSize: 24 });
   });
 
+  it("accepts the listing page size cap", () => {
+    expect(reportQuerySchema.safeParse({ pageSize: "100" }).success).toBe(true);
+  });
+
   it("rejects oversized page sizes", () => {
     expect(reportQuerySchema.safeParse({ pageSize: "101" }).success).toBe(false);
+  });
+
+  it("normalizes one or more damage type filters", () => {
+    expect(reportQuerySchema.parse({ damageType: "severe" }).damageType).toEqual([
+      "severe",
+    ]);
+    expect(
+      reportQuerySchema.parse({ damageType: ["severe", "collapse"] })
+        .damageType,
+    ).toEqual(["severe", "collapse"]);
+  });
+});
+
+describe("mapReportQuerySchema", () => {
+  it("accepts viewport bounds without pagination", () => {
+    const result = mapReportQuerySchema.safeParse({
+      north: "11",
+      south: "10",
+      east: "-66",
+      west: "-67",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        north: 11,
+        south: 10,
+        east: -66,
+        west: -67,
+        limit: 1000,
+      });
+      expect("page" in result.data).toBe(false);
+      expect("pageSize" in result.data).toBe(false);
+    }
+  });
+
+  it("rejects invalid viewport bounds", () => {
+    expect(mapReportQuerySchema.safeParse({ north: "100" }).success).toBe(false);
+    expect(mapReportQuerySchema.safeParse({ west: "-181" }).success).toBe(false);
   });
 });

@@ -25,10 +25,13 @@ export function TurnstileWidget({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetRef = useRef<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(
+    () => typeof window !== "undefined" && Boolean(window.turnstile),
+  );
   const [siteKey, setSiteKey] = useState(
     process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "",
   );
+  const markLoaded = () => setLoaded(true);
 
   useEffect(() => {
     if (siteKey) return;
@@ -71,7 +74,8 @@ export function TurnstileWidget({
       <Script
         src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
         strategy="afterInteractive"
-        onLoad={() => setLoaded(true)}
+        onLoad={markLoaded}
+        onReady={markLoaded}
       />
       <div ref={containerRef} className="turnstile-container" />
     </>

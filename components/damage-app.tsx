@@ -12,18 +12,14 @@ import { DirectorySection } from "@/components/damage-app/sections/DirectorySect
 import { MapSection } from "@/components/damage-app/sections/MapSection";
 import { MissionStrip } from "@/components/damage-app/sections/MissionStrip";
 import { REPORT_CREATED_EVENT } from "@/components/site-shell-header";
-import type { DamageType, PublicReport } from "@/lib/report-schema";
-
-// Map shows every report within the current viewport, so request a high cap
-// instead of paginating the pins.
-const MAP_PAGE_SIZE = 500;
+import type { DamageType, MapItem, PublicReport } from "@/lib/report-schema";
 
 export function DamageApp() {
   const [reports, setReports] = useState<PublicReport[]>([]);
-  const [mapReports, setMapReports] = useState<PublicReport[]>([]);
+  const [mapReports, setMapReports] = useState<MapItem[]>([]);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [damageType, setDamageType] = useState<"all" | DamageType>("all");
+  const [damageTypes, setDamageTypes] = useState<DamageType[]>([]);
   const [state, setState] = useState("all");
   const [bounds, setBounds] = useState("");
   const [page, setPage] = useState(1);
@@ -66,7 +62,7 @@ export function DamageApp() {
       pageSize: String(pageSize),
     });
     if (deferredSearch) params.set("search", deferredSearch);
-    if (damageType !== "all") params.set("damageType", damageType);
+    damageTypes.forEach((type) => params.append("damageType", type));
     if (state !== "all") params.set("state", state);
     setLoading(true);
     try {
@@ -92,7 +88,7 @@ export function DamageApp() {
     } finally {
       setLoading(false);
     }
-  }, [damageType, deferredSearch, page, pageSize, state]);
+  }, [damageTypes, deferredSearch, page, pageSize, state]);
 
   useEffect(() => {
     const timeout = window.setTimeout(loadReports, 250);
@@ -100,13 +96,11 @@ export function DamageApp() {
   }, [loadReports]);
 
   // Map pins follow the viewport (bounds) plus the active filters.
-  const loadMapReports = useCallback(async () => {
-    const params = new URLSearchParams({
-      page: "1",
-      pageSize: String(MAP_PAGE_SIZE),
-    });
+  const loadMapReports = useCallback(async (signal?: AbortSignal) => {
+    if (!bounds) return;
+    const params = new URLSearchParams();
     if (deferredSearch) params.set("search", deferredSearch);
-    if (damageType !== "all") params.set("damageType", damageType);
+    damageTypes.forEach((type) => params.append("damageType", type));
     if (state !== "all") params.set("state", state);
     if (bounds) {
       new URLSearchParams(bounds).forEach((value, key) =>
@@ -115,22 +109,33 @@ export function DamageApp() {
     }
     setMapLoading(true);
     try {
-      const response = await fetch(`/api/reports?${params}`, {
+      const response = await fetch(`/api/reports/map?${params}`, {
         headers: { Accept: "application/json" },
+        signal,
       });
       if (!response.ok) throw new Error("No se pudieron cargar los reportes.");
-      const result = (await response.json()) as { reports: PublicReport[] };
+      const result = (await response.json()) as { reports: MapItem[] };
+      if (signal?.aborted) return;
       setMapReports(result.reports);
-    } catch {
+    } catch (caught) {
+      if (caught instanceof Error && caught.name === "AbortError") {
+        return;
+      }
       // Map pins are best-effort; the directory surfaces load errors instead.
     } finally {
-      setMapLoading(false);
+      if (!signal?.aborted) setMapLoading(false);
     }
-  }, [bounds, damageType, deferredSearch, state]);
+  }, [bounds, damageTypes, deferredSearch, state]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(loadMapReports, 250);
-    return () => window.clearTimeout(timeout);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void loadMapReports(controller.signal);
+    }, 250);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [loadMapReports]);
 
   const handleReportCreated = useCallback((report: PublicReport) => {
@@ -139,12 +144,9 @@ export function DamageApp() {
       report,
       ...current.filter((item) => item.id !== report.id),
     ]);
-    setMapReports((current) => [
-      report,
-      ...current.filter((item) => item.id !== report.id),
-    ]);
     setTotal((current) => current + 1);
-  }, []);
+    void loadMapReports();
+  }, [loadMapReports]);
 
   useEffect(() => {
     function handleGlobalReportCreated(event: Event) {
@@ -163,10 +165,8 @@ export function DamageApp() {
     setReports((current) =>
       current.map((item) => (item.id === report.id ? report : item))
     );
-    setMapReports((current) =>
-      current.map((item) => (item.id === report.id ? report : item))
-    );
-  }, []);
+    void loadMapReports();
+  }, [loadMapReports]);
 
   const handleBoundsChange = useCallback((nextBounds: string) => {
     setBounds(nextBounds);
@@ -180,7 +180,19 @@ export function DamageApp() {
   }, []);
 
   const affectedStates = useMemo(
-    () => new Set(mapReports.map((report) => report.state)).size,
+    () =>
+      new Set(
+        mapReports.flatMap((item) =>
+          item.kind === "group"
+            ? item.reports.map((report) => report.state)
+            : [item.state]
+        )
+      ).size,
+    [mapReports]
+  );
+
+  const visibleReportCount = useMemo(
+    () => mapReports.reduce((sum, item) => sum + item.reportCount, 0),
     [mapReports]
   );
 
@@ -191,6 +203,7 @@ export function DamageApp() {
         reports={mapReports}
         loading={mapLoading}
         affectedStates={affectedStates}
+        visibleReportCount={visibleReportCount}
         onBoundsChange={handleBoundsChange}
         onCreated={handleReportCreated}
       />
@@ -198,7 +211,7 @@ export function DamageApp() {
         reports={reports}
         search={search}
         state={state}
-        damageType={damageType}
+        damageTypes={damageTypes}
         page={page}
         pageSize={pageSize ?? 25}
         total={total}
@@ -213,9 +226,9 @@ export function DamageApp() {
           setPage(1);
           setState(value);
         }}
-        onDamageTypeChange={(value) => {
+        onDamageTypesChange={(value) => {
           setPage(1);
-          setDamageType(value);
+          setDamageTypes(value);
         }}
         onPageChange={handlePageChange}
         onRetry={loadReports}

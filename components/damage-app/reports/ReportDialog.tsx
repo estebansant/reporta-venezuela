@@ -54,6 +54,86 @@ const ReportLocationFields = dynamic(
   }
 );
 
+const REPORT_DRAFT_STORAGE_KEY = "damage-report-draft:v1";
+
+type StoredReportDraft = {
+  version: 1;
+  savedAt: string;
+  draft: ReportDraft;
+};
+
+type ReportFieldErrors = Partial<
+  Record<keyof ReportDraft | "turnstileToken" | "damageType", string>
+>;
+
+function isReportDraft(value: unknown): value is ReportDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Record<keyof ReportDraft, unknown>;
+  return (
+    typeof draft.buildingName === "string" &&
+    typeof draft.address === "string" &&
+    typeof draft.state === "string" &&
+    typeof draft.city === "string" &&
+    typeof draft.latitude === "string" &&
+    typeof draft.longitude === "string" &&
+    damageTypes.includes(draft.damageType as (typeof damageTypes)[number]) &&
+    typeof draft.needsHelp === "boolean" &&
+    typeof draft.description === "string" &&
+    typeof draft.contactName === "string" &&
+    typeof draft.contactPhone === "string" &&
+    typeof draft.contactEmail === "string" &&
+    typeof draft.contactConsent === "boolean"
+  );
+}
+
+function readStoredReportDraft() {
+  try {
+    const stored = window.localStorage.getItem(REPORT_DRAFT_STORAGE_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<StoredReportDraft>;
+    if (parsed.version !== 1 || !isReportDraft(parsed.draft)) return null;
+    return parsed.draft;
+  } catch {
+    return null;
+  }
+}
+
+function hasReportDraftContent(draft: ReportDraft) {
+  return Object.keys(emptyReportDraft).some((key) => {
+    const field = key as keyof ReportDraft;
+    return draft[field] !== emptyReportDraft[field];
+  });
+}
+
+function writeStoredReportDraft(draft: ReportDraft) {
+  try {
+    if (!hasReportDraftContent(draft)) {
+      window.localStorage.removeItem(REPORT_DRAFT_STORAGE_KEY);
+      return;
+    }
+
+    const stored: StoredReportDraft = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      draft,
+    };
+    window.localStorage.setItem(
+      REPORT_DRAFT_STORAGE_KEY,
+      JSON.stringify(stored),
+    );
+  } catch {
+    // Ignore storage failures so private browsing/quota errors do not block reporting.
+  }
+}
+
+function clearStoredReportDraft() {
+  try {
+    window.localStorage.removeItem(REPORT_DRAFT_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures so private browsing/quota errors do not block reporting.
+  }
+}
+
 export function ReportDialog({
   compact = false,
   onCreated,
@@ -62,7 +142,10 @@ export function ReportDialog({
   onCreated: ReportCreatedHandler;
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<ReportDraft>(emptyReportDraft);
+  const [draft, setDraft] = useState<ReportDraft>(() => {
+    if (typeof window === "undefined") return emptyReportDraft;
+    return readStoredReportDraft() ?? emptyReportDraft;
+  });
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileReset, setTurnstileReset] = useState(0);
@@ -74,6 +157,7 @@ export function ReportDialog({
   const [processing, setProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<ReportFieldErrors>({});
   const [success, setSuccess] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -116,6 +200,10 @@ export function ReportDialog({
   useEffect(() => {
     imagesRef.current = images;
   }, [images]);
+
+  useEffect(() => {
+    writeStoredReportDraft(draft);
+  }, [draft]);
 
   useEffect(() => {
     return () => {
@@ -210,6 +298,10 @@ export function ReportDialog({
     field: K,
     value: ReportDraft[K]
   ) {
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      return { ...current, [field]: undefined };
+    });
     setDraft((current) => ({ ...current, [field]: value }));
   }
 
@@ -283,14 +375,21 @@ export function ReportDialog({
   async function submitReport() {
     setError("");
     setSuccess("");
+    setFieldErrors({});
     const validation = reportInputSchema.safeParse({
       ...draft,
       turnstileToken,
     });
     if (!validation.success) {
-      setError(
-        validation.error.issues[0]?.message ?? "Revisa los campos obligatorios."
-      );
+      const nextFieldErrors: ReportFieldErrors = {};
+      for (const issue of validation.error.issues) {
+        const field = issue.path[0];
+        if (typeof field === "string" && !nextFieldErrors[field as keyof ReportFieldErrors]) {
+          nextFieldErrors[field as keyof ReportFieldErrors] = issue.message;
+        }
+      }
+      setFieldErrors(nextFieldErrors);
+      setError(validation.error.issues[0]?.message ?? "Revisa los campos marcados.");
       return;
     }
     if (!images.length) {
@@ -320,7 +419,9 @@ export function ReportDialog({
       }
       onCreated(result.report);
       setSuccess("Reporte publicado correctamente.");
+      setFieldErrors({});
       setDraft(emptyReportDraft);
+      clearStoredReportDraft();
       lastAutoLocationRef.current = null;
       setGeocodeMessage("");
       setLocationFieldsKey((current) => current + 1);
@@ -342,7 +443,21 @@ export function ReportDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        setTurnstileToken("");
+        if (nextOpen) {
+          const storedDraft = readStoredReportDraft();
+          if (storedDraft) {
+            setDraft(storedDraft);
+            setLocationFieldsKey((current) => current + 1);
+          }
+          setTurnstileReset((current) => current + 1);
+        }
+      }}
+    >
       <DialogTrigger
         render={
           <Button
@@ -370,15 +485,28 @@ export function ReportDialog({
               <span>Edificio o estructura *</span>
               <Input
                 value={draft.buildingName}
+                aria-invalid={fieldErrors.buildingName ? true : undefined}
+                aria-describedby={
+                  fieldErrors.buildingName ? "report-buildingName-error" : undefined
+                }
                 onChange={(event) =>
                   updateDraft("buildingName", event.target.value)
                 }
                 placeholder="Ej. Edificio Las Acacias"
               />
+              {fieldErrors.buildingName ? (
+                <p className="field-help field-error" id="report-buildingName-error">
+                  {fieldErrors.buildingName}
+                </p>
+              ) : null}
             </label>
             <ReportLocationFields
               key={locationFieldsKey}
               resetKey={locationFieldsKey}
+              stateValue={draft.state}
+              cityValue={draft.city}
+              stateError={fieldErrors.state}
+              cityError={fieldErrors.city}
               onStateChange={(state) => updateDraft("state", state)}
               onCityChange={(city) => updateDraft("city", city)}
             />
@@ -387,10 +515,17 @@ export function ReportDialog({
             <span>Dirección *</span>
             <Input
               value={draft.address}
+              aria-invalid={fieldErrors.address ? true : undefined}
+              aria-describedby={fieldErrors.address ? "report-address-error" : undefined}
               onChange={(event) => updateDraft("address", event.target.value)}
               placeholder="Av., calle, urbanización y referencia"
               autoComplete="street-address"
             />
+            {fieldErrors.address ? (
+              <p className="field-help field-error" id="report-address-error">
+                {fieldErrors.address}
+              </p>
+            ) : null}
           </label>
           <div className="form-actions">
             <Button
@@ -420,11 +555,20 @@ export function ReportDialog({
                 max={90}
                 step="any"
                 value={draft.latitude}
+                aria-invalid={fieldErrors.latitude ? true : undefined}
+                aria-describedby={
+                  fieldErrors.latitude ? "report-latitude-error" : undefined
+                }
                 onChange={(event) =>
                   updateDraft("latitude", event.target.value)
                 }
                 placeholder="Ej. 10.480594"
               />
+              {fieldErrors.latitude ? (
+                <p className="field-help field-error" id="report-latitude-error">
+                  {fieldErrors.latitude}
+                </p>
+              ) : null}
             </label>
             <label>
               <span>Longitud *</span>
@@ -435,11 +579,20 @@ export function ReportDialog({
                 max={180}
                 step="any"
                 value={draft.longitude}
+                aria-invalid={fieldErrors.longitude ? true : undefined}
+                aria-describedby={
+                  fieldErrors.longitude ? "report-longitude-error" : undefined
+                }
                 onChange={(event) =>
                   updateDraft("longitude", event.target.value)
                 }
                 placeholder="Ej. -66.903603"
               />
+              {fieldErrors.longitude ? (
+                <p className="field-help field-error" id="report-longitude-error">
+                  {fieldErrors.longitude}
+                </p>
+              ) : null}
             </label>
           </div>
           <p className="field-help location-help" aria-live="polite">
@@ -537,12 +690,16 @@ export function ReportDialog({
                   className={cn(draft.damageType === type && "selected")}
                   type="button"
                   key={type}
+                  aria-invalid={fieldErrors.damageType ? true : undefined}
                   onClick={() => updateDraft("damageType", type)}
                 >
                   {damageLabels[type]}
                 </button>
               ))}
             </div>
+            {fieldErrors.damageType ? (
+              <p className="field-help field-error">{fieldErrors.damageType}</p>
+            ) : null}
           </fieldset>
           <label
             className={cn("help-needed-field", draft.needsHelp && "selected")}
@@ -570,12 +727,21 @@ export function ReportDialog({
             <span>Descripción *</span>
             <Textarea
               value={draft.description}
+              aria-invalid={fieldErrors.description ? true : undefined}
+              aria-describedby={
+                fieldErrors.description ? "report-description-error" : undefined
+              }
               onChange={(event) =>
                 updateDraft("description", event.target.value)
               }
               rows={4}
               placeholder="Describe los daños visibles y cualquier riesgo inmediato."
             />
+            {fieldErrors.description ? (
+              <p className="field-help field-error" id="report-description-error">
+                {fieldErrors.description}
+              </p>
+            ) : null}
           </label>
           <div>
             <strong>Contacto público (opcional)</strong>
@@ -587,13 +753,25 @@ export function ReportDialog({
           <div className="contact-grid">
             <Input
               value={draft.contactName}
+              aria-invalid={fieldErrors.contactName ? true : undefined}
+              aria-describedby={
+                fieldErrors.contactName ? "report-contactName-error" : undefined
+              }
               onChange={(event) =>
                 updateDraft("contactName", event.target.value)
               }
               placeholder="Nombre"
             />
+            {fieldErrors.contactName ? (
+              <p className="field-help field-error" id="report-contactName-error">
+                {fieldErrors.contactName}
+              </p>
+            ) : null}
             <PhoneInput
-              className="contact-phone"
+              className={cn(
+                "contact-phone",
+                fieldErrors.contactPhone && "contact-phone-error"
+              )}
               value={
                 (draft.contactPhone || undefined) as
                   | PhoneNumberValue
@@ -609,22 +787,47 @@ export function ReportDialog({
               countryCallingCodeEditable={false}
               limitMaxLength
               autoComplete="tel"
+              aria-invalid={fieldErrors.contactPhone ? true : undefined}
+              aria-describedby={
+                fieldErrors.contactPhone ? "report-contactPhone-error" : undefined
+              }
               placeholder="Teléfono o WhatsApp"
             />
+            {fieldErrors.contactPhone ? (
+              <p className="field-help field-error" id="report-contactPhone-error">
+                {fieldErrors.contactPhone}
+              </p>
+            ) : null}
             <Input
               className="contact-email"
               value={draft.contactEmail}
+              aria-invalid={fieldErrors.contactEmail ? true : undefined}
+              aria-describedby={
+                fieldErrors.contactEmail ? "report-contactEmail-error" : undefined
+              }
               onChange={(event) =>
                 updateDraft("contactEmail", event.target.value)
               }
               placeholder="Correo electrónico"
               type="email"
             />
+            {fieldErrors.contactEmail ? (
+              <p
+                className="field-help field-error contact-email"
+                id="report-contactEmail-error"
+              >
+                {fieldErrors.contactEmail}
+              </p>
+            ) : null}
           </div>
           <label className="consent-field">
             <input
               type="checkbox"
               checked={draft.contactConsent}
+              aria-invalid={fieldErrors.contactConsent ? true : undefined}
+              aria-describedby={
+                fieldErrors.contactConsent ? "report-contactConsent-error" : undefined
+              }
               onChange={(event) =>
                 updateDraft("contactConsent", event.target.checked)
               }
@@ -633,7 +836,17 @@ export function ReportDialog({
               Autorizo la publicación de los datos de contacto que proporcioné.
             </span>
           </label>
-          <TurnstileWidget onToken={setToken} resetKey={turnstileReset} />
+          {fieldErrors.contactConsent ? (
+            <p className="field-help field-error" id="report-contactConsent-error">
+              {fieldErrors.contactConsent}
+            </p>
+          ) : null}
+          {open ? (
+            <TurnstileWidget onToken={setToken} resetKey={turnstileReset} />
+          ) : null}
+          {fieldErrors.turnstileToken ? (
+            <p className="field-help field-error">{fieldErrors.turnstileToken}</p>
+          ) : null}
           {error ? <p className="form-message form-error">{error}</p> : null}
           {success ? (
             <p className="form-message form-success">{success}</p>

@@ -14,6 +14,12 @@
     "db:migrate:local": "wrangler d1 migrations apply terremoto-reports-local --local",
     "db:migrate:preview": "wrangler d1 migrations apply terremoto-reports-preview --remote --env preview",
     "db:migrate:production": "wrangler d1 migrations apply terremoto-reports --remote --env production",
+    "import:source": "tsx scripts/import-terremoto-source.ts",
+    "import:satellite": "tsx scripts/import-satellite.ts",
+    "import:satellite:ems": "tsx scripts/import-satellite.ts --tier ems",
+    "import:satellite:ems-zones": "tsx scripts/import-satellite.ts --tier ems-zones",
+    "import:satellite:maxar": "tsx scripts/import-satellite.ts --tier maxar",
+    "import:satellite:sar": "tsx scripts/import-satellite.ts --tier sar",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run"
@@ -49,7 +55,10 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
+    "geotiff": "^2.1.3",
+    "sharp": "^0.35.2",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5",
     "vitest": "^4.1.9",
     "wrangler": "^4.105.0"

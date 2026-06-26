@@ -1,9 +1,19 @@
+import { jsonHeaders } from "@/lib/api-protection";
 import { getCloudflareEnv } from "@/lib/cloudflare";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+const MEDIA_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+function notFoundResponse() {
+  return new Response("Not found", {
+    status: 404,
+    headers: jsonHeaders({ "Cache-Control": "no-store" }),
+  });
+}
+
+async function handleMediaRequest(
   request: Request,
   context: RouteContext<"/media/[...key]">,
 ) {
@@ -13,7 +23,7 @@ export async function GET(
     !/^reports\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.webp$/i.test(key) ||
     key.includes("..")
   ) {
-    return new Response("Not found", { status: 404 });
+    return notFoundResponse();
   }
 
   const { REPORT_IMAGES } = await getCloudflareEnv();
@@ -23,18 +33,35 @@ export async function GET(
       ? { etagDoesNotMatch: ifNoneMatch.replaceAll('"', "") }
       : undefined,
   });
-  if (!object) return new Response("Not found", { status: 404 });
+  if (!object) return notFoundResponse();
   if (!object.body) {
     return new Response(null, {
       status: 304,
-      headers: { ETag: object.httpEtag },
+      headers: jsonHeaders({
+        ETag: object.httpEtag,
+        "Cache-Control": MEDIA_CACHE_CONTROL,
+      }),
     });
   }
 
-  const headers = new Headers();
+  const headers = jsonHeaders();
   object.writeHttpMetadata(headers);
   headers.set("ETag", object.httpEtag);
-  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  headers.set("Cache-Control", MEDIA_CACHE_CONTROL);
   headers.set("X-Content-Type-Options", "nosniff");
-  return new Response(object.body, { headers });
+  return new Response(request.method === "HEAD" ? null : object.body, { headers });
+}
+
+export async function GET(
+  request: Request,
+  context: RouteContext<"/media/[...key]">,
+) {
+  return handleMediaRequest(request, context);
+}
+
+export async function HEAD(
+  request: Request,
+  context: RouteContext<"/media/[...key]">,
+) {
+  return handleMediaRequest(request, context);
 }

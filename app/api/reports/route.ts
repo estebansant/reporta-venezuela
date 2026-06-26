@@ -1,3 +1,9 @@
+import {
+  checkRateLimit,
+  getClientIp,
+  jsonHeaders,
+  rateLimitResponse,
+} from "@/lib/api-protection";
 import { getCloudflareEnv } from "@/lib/cloudflare";
 import {
   reportInputSchema,
@@ -41,13 +47,32 @@ async function verifyTurnstile(
 }
 
 function errorResponse(message: string, status: number, fields?: unknown) {
-  return Response.json({ error: message, fields }, { status });
+  return Response.json(
+    { error: message, fields },
+    { status, headers: jsonHeaders({ "Cache-Control": "no-store" }) },
+  );
+}
+
+function searchParamsToQuery(searchParams: URLSearchParams) {
+  const query: Record<string, string | string[]> = Object.fromEntries(
+    searchParams.entries(),
+  );
+  const damageTypes = searchParams.getAll("damageType");
+  if (damageTypes.length) query.damageType = damageTypes;
+  return query;
 }
 
 export async function GET(request: Request) {
+  const rateLimit = checkRateLimit(request, {
+    namespace: "reports:get",
+    limit: 60,
+    windowMs: 60_000,
+  });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfter);
+
   const url = new URL(request.url);
   const parsed = reportQuerySchema.safeParse(
-    Object.fromEntries(url.searchParams.entries()),
+    searchParamsToQuery(url.searchParams),
   );
   if (!parsed.success) {
     return errorResponse("Filtros inválidos.", 400, parsed.error.flatten());
@@ -69,9 +94,11 @@ export async function GET(request: Request) {
     filters.push("r.state = ?");
     bindings.push(query.state);
   }
-  if (query.damageType) {
-    filters.push("r.damage_type = ?");
-    bindings.push(query.damageType);
+  if (query.damageType?.length) {
+    filters.push(
+      `r.damage_type IN (${query.damageType.map(() => "?").join(",")})`,
+    );
+    bindings.push(...query.damageType);
   }
   if (
     query.north !== undefined &&
@@ -117,18 +144,32 @@ export async function GET(request: Request) {
     reports = rowsToReports(result.results);
   }
 
-  return Response.json({
-    reports,
-    pagination: {
-      page: query.page,
-      pageSize: query.pageSize,
-      total,
-      totalPages: Math.ceil(total / query.pageSize),
+  return Response.json(
+    {
+      reports,
+      pagination: {
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+        totalPages: Math.ceil(total / query.pageSize),
+      },
     },
-  });
+    {
+      headers: jsonHeaders({
+        "Cache-Control": "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
+      }),
+    },
+  );
 }
 
 export async function POST(request: Request) {
+  const rateLimit = checkRateLimit(request, {
+    namespace: "reports:post",
+    limit: 3,
+    windowMs: 10 * 60_000,
+  });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfter);
+
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.includes("multipart/form-data")) {
     return errorResponse("El formulario debe enviarse como multipart/form-data.", 415);
@@ -174,7 +215,7 @@ export async function POST(request: Request) {
   const isHuman = await verifyTurnstile(
     env.TURNSTILE_SECRET,
     parsed.data.turnstileToken,
-    request.headers.get("CF-Connecting-IP"),
+    getClientIp(request),
   );
   if (!isHuman) {
     return errorResponse("La verificación de seguridad expiró o no es válida.", 403);
@@ -259,7 +300,10 @@ export async function POST(request: Request) {
     ];
     await env.DB.batch(statements);
     const report = await getReportById(env.DB, reportId);
-    return Response.json({ report }, { status: 201 });
+    return Response.json(
+      { report },
+      { status: 201, headers: jsonHeaders({ "Cache-Control": "no-store" }) },
+    );
   } catch (error) {
     if (uploadedKeys.length) {
       await env.REPORT_IMAGES.delete(uploadedKeys);
