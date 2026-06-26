@@ -402,7 +402,7 @@ export function ReportDialog({
                 Tomar una foto
               </Button>
               <small aria-live="polite">
-                {images.length}/5 fotos · máximo 10 MB por foto
+                {images.length}/5 fotos · máximo 20 MB por foto
               </small>
             </div>
             {images.length ? (

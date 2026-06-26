@@ -1,4 +1,4 @@
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export function readWebpDimensions(bytes: Uint8Array) {
   if (bytes.byteLength < 30) return null;
@@ -38,12 +38,6 @@ export async function validateWebpFile(file: File) {
   if (file.size === 0 || file.size > MAX_IMAGE_BYTES) return null;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const dimensions = readWebpDimensions(bytes);
-  if (
-    !dimensions ||
-    dimensions.width > 1920 ||
-    dimensions.height > 1920
-  ) {
-    return null;
-  }
+  if (!dimensions) return null;
   return { bytes, ...dimensions };
 }

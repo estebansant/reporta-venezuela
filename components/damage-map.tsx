@@ -103,8 +103,8 @@ export function DamageMap({
 }) {
   return (
     <MapContainer
-      center={[7.5, -66.2]}
-      zoom={6}
+      center={[10.3547, -67.1924]}
+      zoom={10}
       scrollWheelZoom
       className="h-full w-full"
       aria-label="Mapa interactivo de Venezuela con reportes de daños"

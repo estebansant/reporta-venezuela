@@ -1,5 +1,13 @@
-const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;
-const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+// The browser decodes the original photo (handles JPEG, PNG, and the HEIC the
+// iPhone camera produces) and we resize it on a canvas. The WebP *encode* is
+// done with a WASM codec (@jsquash/webp) instead of canvas.toBlob("image/webp")
+// because native WebP encoding is missing or broken on several mobile browsers,
+// which previously produced PNG bytes the server rejected.
+const MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
+// Target size for the WebP optimization. We lower the quality to try to reach
+// it, but never block the upload if the photo is still heavier — it only needs
+// to fit the 20 MB server limit, which a 1920 px WebP is always far below.
+const TARGET_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_DIMENSION = 1920;
 
 export interface ProcessedImage {
@@ -8,16 +16,6 @@ export interface ProcessedImage {
   previewUrl: string;
   width: number;
   height: number;
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement, quality: number) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("No se pudo convertir la imagen."))),
-      "image/webp",
-      quality,
-    );
-  });
 }
 
 async function loadImage(file: File) {
@@ -64,11 +62,14 @@ export async function processImage(file: File): Promise<ProcessedImage> {
     throw new Error("El archivo seleccionado no es una imagen.");
   }
   if (file.size > MAX_ORIGINAL_BYTES) {
-    throw new Error("Cada archivo original puede pesar como máximo 10 MB.");
+    throw new Error("Cada archivo original puede pesar como máximo 20 MB.");
   }
 
   const image = await loadImage(file);
-  const scale = Math.min(1, MAX_DIMENSION / Math.max(image.width, image.height));
+  const scale = Math.min(
+    1,
+    MAX_DIMENSION / Math.max(image.width, image.height)
+  );
   const width = Math.max(1, Math.round(image.width * scale));
   const height = Math.max(1, Math.round(image.height * scale));
   const canvas = document.createElement("canvas");
@@ -82,16 +83,17 @@ export async function processImage(file: File): Promise<ProcessedImage> {
   context.drawImage(image.source, 0, 0, width, height);
   image.close();
 
-  let quality = 0.6;
-  let blob = await canvasToBlob(canvas, quality);
-  while (blob.size > MAX_OUTPUT_BYTES && quality > 0.3) {
-    quality -= 0.1;
-    blob = await canvasToBlob(canvas, quality);
-  }
-  if (blob.size > MAX_OUTPUT_BYTES) {
-    throw new Error("La imagen optimizada todavía supera 2 MB.");
+  const imageData = context.getImageData(0, 0, width, height);
+  const { default: encode } = await import("@jsquash/webp/encode");
+
+  let quality = 80;
+  let buffer = await encode(imageData, { quality });
+  while (buffer.byteLength > TARGET_OUTPUT_BYTES && quality > 40) {
+    quality -= 10;
+    buffer = await encode(imageData, { quality });
   }
 
+  const blob = new Blob([buffer], { type: "image/webp" });
   const id = crypto.randomUUID();
   const processedFile = new File([blob], `${id}.webp`, {
     type: "image/webp",

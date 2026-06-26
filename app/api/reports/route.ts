@@ -185,7 +185,7 @@ export async function POST(request: Request) {
     const validated = await validateWebpFile(image);
     if (!validated) {
       return errorResponse(
-        "Cada imagen debe ser WebP válido, pesar hasta 2 MB y medir como máximo 1920 px por lado.",
+        "Cada imagen debe ser un WebP válido y pesar hasta 20 MB.",
         400,
       );
     }

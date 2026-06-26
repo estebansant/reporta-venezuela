@@ -7,7 +7,7 @@
     "build": "next build",
     "build:cloudflare": "opennextjs-cloudflare build",
     "preview": "pnpm build:cloudflare && wrangler dev",
-    "deploy": "pnpm build:cloudflare && opennextjs-cloudflare deploy",
+    "deploy": "pnpm build:cloudflare && opennextjs-cloudflare deploy --env production",
     "deploy:preview": "pnpm build:cloudflare && opennextjs-cloudflare deploy --env preview",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "db:migrate:local": "wrangler d1 migrations apply terremoto-reports-local --local",
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@jsquash/webp": "^1.5.0",
     "@opennextjs/cloudflare": "^1.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
