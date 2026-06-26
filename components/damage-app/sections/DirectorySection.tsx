@@ -37,6 +37,7 @@ export function DirectorySection({
   search,
   state,
   damageTypes: selectedDamageTypes,
+  verifiedBySatelliteOnly,
   page,
   pageSize,
   total,
@@ -46,6 +47,7 @@ export function DirectorySection({
   onSearchChange,
   onStateChange,
   onDamageTypesChange,
+  onVerifiedBySatelliteOnlyChange,
   onPageChange,
   onRetry,
   onCreated,
@@ -55,6 +57,7 @@ export function DirectorySection({
   search: string;
   state: string;
   damageTypes: DamageType[];
+  verifiedBySatelliteOnly: boolean;
   page: number;
   pageSize: number;
   total: number;
@@ -64,6 +67,7 @@ export function DirectorySection({
   onSearchChange: (search: string) => void;
   onStateChange: (state: string) => void;
   onDamageTypesChange: (damageTypes: DamageType[]) => void;
+  onVerifiedBySatelliteOnlyChange: (value: boolean) => void;
   onPageChange: (page: number) => void;
   onRetry: () => void;
   onCreated: ReportCreatedHandler;
@@ -136,6 +140,15 @@ export function DirectorySection({
             {damageLabels[type]}
           </Button>
         ))}
+        <Button
+          variant={verifiedBySatelliteOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() =>
+            onVerifiedBySatelliteOnlyChange(!verifiedBySatelliteOnly)
+          }
+        >
+          Daño verificado por satélite
+        </Button>
       </div>
       {loadError ? (
         <div className="no-results">

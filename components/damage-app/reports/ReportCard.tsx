@@ -1,7 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { Check, LoaderCircle, SatelliteDish, ShieldAlert, X } from "lucide-react";
+import {
+  Check,
+  LoaderCircle,
+  SatelliteDish,
+  ShieldAlert,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 
 import { damageLabels } from "@/components/damage-app/constants";
@@ -109,7 +115,7 @@ function ReportGallery({
       {report.verifiedBySatellite ? (
         <Badge className="satellite-verified-badge">
           <SatelliteDish aria-hidden="true" />
-          Verificado satélite
+          Daño verificado por satélite
         </Badge>
       ) : null}
     </div>
@@ -159,7 +165,7 @@ export function ReportCard({
       setUpdateError(
         caught instanceof Error
           ? caught.message
-          : "No se pudo actualizar el reporte.",
+          : "No se pudo actualizar el reporte."
       );
     } finally {
       setUpdating(false);

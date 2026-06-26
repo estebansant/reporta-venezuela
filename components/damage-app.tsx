@@ -20,6 +20,7 @@ export function DamageApp() {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [damageTypes, setDamageTypes] = useState<DamageType[]>([]);
+  const [verifiedBySatelliteOnly, setVerifiedBySatelliteOnly] = useState(false);
   const [state, setState] = useState("all");
   const [bounds, setBounds] = useState("");
   const [page, setPage] = useState(1);
@@ -63,6 +64,7 @@ export function DamageApp() {
     });
     if (deferredSearch) params.set("search", deferredSearch);
     damageTypes.forEach((type) => params.append("damageType", type));
+    if (verifiedBySatelliteOnly) params.set("verifiedBySatellite", "true");
     if (state !== "all") params.set("state", state);
     setLoading(true);
     try {
@@ -88,7 +90,7 @@ export function DamageApp() {
     } finally {
       setLoading(false);
     }
-  }, [damageTypes, deferredSearch, page, pageSize, state]);
+  }, [damageTypes, deferredSearch, page, pageSize, state, verifiedBySatelliteOnly]);
 
   useEffect(() => {
     const timeout = window.setTimeout(loadReports, 250);
@@ -101,6 +103,7 @@ export function DamageApp() {
     const params = new URLSearchParams();
     if (deferredSearch) params.set("search", deferredSearch);
     damageTypes.forEach((type) => params.append("damageType", type));
+    if (verifiedBySatelliteOnly) params.set("verifiedBySatellite", "true");
     if (state !== "all") params.set("state", state);
     if (bounds) {
       new URLSearchParams(bounds).forEach((value, key) =>
@@ -125,7 +128,7 @@ export function DamageApp() {
     } finally {
       if (!signal?.aborted) setMapLoading(false);
     }
-  }, [bounds, damageTypes, deferredSearch, state]);
+  }, [bounds, damageTypes, deferredSearch, state, verifiedBySatelliteOnly]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -212,6 +215,7 @@ export function DamageApp() {
         search={search}
         state={state}
         damageTypes={damageTypes}
+        verifiedBySatelliteOnly={verifiedBySatelliteOnly}
         page={page}
         pageSize={pageSize ?? 25}
         total={total}
@@ -229,6 +233,10 @@ export function DamageApp() {
         onDamageTypesChange={(value) => {
           setPage(1);
           setDamageTypes(value);
+        }}
+        onVerifiedBySatelliteOnlyChange={(value) => {
+          setPage(1);
+          setVerifiedBySatelliteOnly(value);
         }}
         onPageChange={handlePageChange}
         onRetry={loadReports}

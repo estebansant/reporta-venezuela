@@ -100,6 +100,9 @@ export async function GET(request: Request) {
     );
     bindings.push(...query.damageType);
   }
+  if (query.verifiedBySatellite) {
+    filters.push("r.verified_by_satellite = 1");
+  }
   if (
     query.north !== undefined &&
     query.south !== undefined &&

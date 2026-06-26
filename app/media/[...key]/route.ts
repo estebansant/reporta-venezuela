@@ -45,7 +45,12 @@ async function handleMediaRequest(
   }
 
   const headers = jsonHeaders();
-  object.writeHttpMetadata(headers);
+  // Set Content-Type explicitly instead of object.writeHttpMetadata(): the
+  // latter throws under the local `next dev` R2 shim. All stored media is webp.
+  headers.set(
+    "Content-Type",
+    object.httpMetadata?.contentType ?? "image/webp",
+  );
   headers.set("ETag", object.httpEtag);
   headers.set("Cache-Control", MEDIA_CACHE_CONTROL);
   headers.set("X-Content-Type-Options", "nosniff");

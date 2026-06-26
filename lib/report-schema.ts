@@ -11,6 +11,11 @@ const damageTypeFilterSchema = z.preprocess(
   z.array(z.enum(damageTypes)).max(damageTypes.length).optional(),
 );
 
+const optionalBooleanFilterSchema = z
+  .union([z.literal("true"), z.literal("false"), z.boolean()])
+  .transform((value) => value === true || value === "true")
+  .optional();
+
 export const reportInputSchema = z
   .object({
     buildingName: z
@@ -105,6 +110,7 @@ export const reportQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   state: z.string().trim().max(80).optional(),
   damageType: damageTypeFilterSchema,
+  verifiedBySatellite: optionalBooleanFilterSchema,
   north: z.coerce.number().min(-90).max(90).optional(),
   south: z.coerce.number().min(-90).max(90).optional(),
   east: z.coerce.number().min(-180).max(180).optional(),
@@ -115,6 +121,7 @@ export const mapReportQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   state: z.string().trim().max(80).optional(),
   damageType: damageTypeFilterSchema,
+  verifiedBySatellite: optionalBooleanFilterSchema,
   north: z.coerce.number().min(-90).max(90).optional(),
   south: z.coerce.number().min(-90).max(90).optional(),
   east: z.coerce.number().min(-180).max(180).optional(),

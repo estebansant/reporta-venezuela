@@ -44,3 +44,6 @@ next-env.d.ts
 
 # notas internas
 /BORRAR-DATOS-PRUEBA.md
+/EMSR884_products
+database.sql
+*.sql

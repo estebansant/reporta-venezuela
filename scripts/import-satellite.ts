@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -138,6 +138,24 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
+// Load a GeoJSON FeatureCollection from an http(s) URL or a local file path.
+async function loadFeatures(src: string): Promise<GeoJSONFeature[]> {
+  let text: string;
+  if (/^https?:\/\//i.test(src)) {
+    progress(`Descargando ${src}`);
+    const response = await fetchWithTimeout(src, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`${src} respondió ${response.status}.`);
+    text = await response.text();
+  } else {
+    progress(`Leyendo archivo local ${src}`);
+    text = await readFile(src, "utf8");
+  }
+  const data = JSON.parse(text) as { features?: GeoJSONFeature[] };
+  return data.features ?? [];
+}
+
 // ---------------------------------------------------------------------------
 // Tier A — Copernicus EMS (authoritative, auto-publish + 15 m auto-tag)
 // ---------------------------------------------------------------------------
@@ -208,13 +226,7 @@ async function runEmsTier(
     );
   }
 
-  progress(`EMS: descargando ${url}`);
-  const response = await fetchWithTimeout(url, {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) throw new Error(`EMS respondió ${response.status}.`);
-  const collection = (await response.json()) as { features?: GeoJSONFeature[] };
-  const features = collection.features ?? [];
+  const features = await loadFeatures(url);
   summary.fetched = features.length;
 
   const statements: string[] = [];
@@ -340,13 +352,7 @@ async function runEmsZonesTier(
   }
   const activationId = options.event ?? "EMS";
 
-  progress(`EMS zones: descargando ${url}`);
-  const response = await fetchWithTimeout(url, {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) throw new Error(`EMS zones respondió ${response.status}.`);
-  const collection = (await response.json()) as { features?: GeoJSONFeature[] };
-  const features = collection.features ?? [];
+  const features = await loadFeatures(url);
   summary.fetched = features.length;
 
   const zones: DamageZoneRecord[] = [];

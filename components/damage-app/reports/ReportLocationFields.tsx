@@ -33,6 +33,10 @@ export function ReportLocationFields({
   const [selectedStateId, setSelectedStateId] = useState(0);
   const [citySuggestions, setCitySuggestions] = useState<string[]>([]);
   const citySuggestionsId = useId();
+  const normalizedStateValue = useMemo(
+    () => normalizeVenezuelanState(stateValue),
+    [stateValue],
+  );
 
   useEffect(() => {
     if (!stateValue) return;
@@ -40,9 +44,8 @@ export function ReportLocationFields({
     let active = true;
     GetState(VENEZUELA_COUNTRY_ID).then((states) => {
       if (!active) return;
-      const normalizedState = normalizeVenezuelanState(stateValue);
       const restoredState = states.find(
-        (state) => normalizeVenezuelanState(state.name) === normalizedState,
+        (state) => normalizeVenezuelanState(state.name) === normalizedStateValue,
       );
       setSelectedStateId(restoredState?.id ?? 0);
     });
@@ -50,29 +53,19 @@ export function ReportLocationFields({
     return () => {
       active = false;
     };
-  }, [stateValue]);
+  }, [normalizedStateValue]);
 
   useEffect(() => {
-    let active = true;
+    if (!selectedStateId) return;
 
-    if (!selectedStateId) {
-      setCitySuggestions(
-        normalizeVenezuelanState(stateValue) === LA_GUAIRA_STATE
-          ? [MACUTO_CITY]
-          : [],
-      );
-      return () => {
-        active = false;
-      };
-    }
+    let active = true;
 
     GetCity(VENEZUELA_COUNTRY_ID, selectedStateId).then((cities) => {
       if (!active) return;
-      const normalizedState = normalizeVenezuelanState(stateValue);
       const suggestions = new Set(
         cities.map((city) => normalizeVenezuelanCity(city.name)),
       );
-      if (normalizedState === LA_GUAIRA_STATE) {
+      if (normalizedStateValue === LA_GUAIRA_STATE) {
         suggestions.add(MACUTO_CITY);
       }
       setCitySuggestions(
@@ -85,7 +78,7 @@ export function ReportLocationFields({
     return () => {
       active = false;
     };
-  }, [selectedStateId, stateValue]);
+  }, [normalizedStateValue, selectedStateId]);
 
   function resetCity() {
     onCityChange("");
@@ -95,11 +88,15 @@ export function ReportLocationFields({
   const cityErrorId = cityError ? `report-city-error-${resetKey}` : undefined;
   const cityPlaceholder = useMemo(
     () =>
-      selectedStateId || normalizeVenezuelanState(stateValue) === LA_GUAIRA_STATE
+      selectedStateId || normalizedStateValue === LA_GUAIRA_STATE
         ? "Selecciona o escribe una ciudad o zona"
         : "Escribe la ciudad o la zona",
-    [selectedStateId, stateValue],
+    [normalizedStateValue, selectedStateId],
   );
+  const availableCitySuggestions = useMemo(() => {
+    if (selectedStateId) return citySuggestions;
+    return normalizedStateValue === LA_GUAIRA_STATE ? [MACUTO_CITY] : [];
+  }, [citySuggestions, normalizedStateValue, selectedStateId]);
 
   return (
     <>
@@ -137,7 +134,7 @@ export function ReportLocationFields({
         <span>Ciudad *</span>
         <Input
           className="country-location-input"
-          list={citySuggestions.length ? citySuggestionsId : undefined}
+          list={availableCitySuggestions.length ? citySuggestionsId : undefined}
           value={cityValue}
           placeholder={cityPlaceholder}
           autoComplete="address-level2"
@@ -145,9 +142,9 @@ export function ReportLocationFields({
           aria-describedby={cityErrorId}
           onChange={(event) => onCityChange(event.target.value)}
         />
-        {citySuggestions.length ? (
+        {availableCitySuggestions.length ? (
           <datalist id={citySuggestionsId}>
-            {citySuggestions.map((city) => (
+            {availableCitySuggestions.map((city) => (
               <option key={city} value={city} />
             ))}
           </datalist>

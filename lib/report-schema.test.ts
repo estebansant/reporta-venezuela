@@ -96,6 +96,17 @@ describe("reportQuerySchema", () => {
         .damageType,
     ).toEqual(["severe", "collapse"]);
   });
+
+  it("normalizes the satellite verification filter", () => {
+    expect(
+      reportQuerySchema.parse({ verifiedBySatellite: "true" })
+        .verifiedBySatellite,
+    ).toBe(true);
+    expect(
+      reportQuerySchema.parse({ verifiedBySatellite: "false" })
+        .verifiedBySatellite,
+    ).toBe(false);
+  });
 });
 
 describe("mapReportQuerySchema", () => {
@@ -124,5 +135,14 @@ describe("mapReportQuerySchema", () => {
   it("rejects invalid viewport bounds", () => {
     expect(mapReportQuerySchema.safeParse({ north: "100" }).success).toBe(false);
     expect(mapReportQuerySchema.safeParse({ west: "-181" }).success).toBe(false);
+  });
+
+  it("accepts the satellite verification filter", () => {
+    const result = mapReportQuerySchema.safeParse({
+      verifiedBySatellite: "true",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.verifiedBySatellite).toBe(true);
   });
 });
