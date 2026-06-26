@@ -68,6 +68,8 @@ export function ReportDialog({
   const [turnstileReset, setTurnstileReset] = useState(0);
   const [selectingLocation, setSelectingLocation] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
+  const [geocodeMessage, setGeocodeMessage] = useState("");
   const [locationFieldsKey, setLocationFieldsKey] = useState(0);
   const [processing, setProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -76,8 +78,16 @@ export function ReportDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<ProcessedImage[]>([]);
+  const lastAutoLocationRef = useRef<{
+    latitude: string;
+    longitude: string;
+  } | null>(null);
   const latitude = Number(draft.latitude);
   const longitude = Number(draft.longitude);
+  const canGeocodeAddress =
+    draft.address.trim().length >= 5 &&
+    draft.city.trim().length >= 2 &&
+    draft.state.trim().length >= 2;
   const selectedPosition =
     draft.latitude !== "" &&
     draft.longitude !== "" &&
@@ -89,6 +99,17 @@ export function ReportDialog({
     longitude <= 180
       ? { latitude, longitude }
       : null;
+  const locationHelpMessage = !canGeocodeAddress
+    ? selectedPosition
+      ? `Pin ubicado en ${draft.latitude}, ${draft.longitude}. Verifica o ajusta la posición en el mapa.`
+      : "Ingresa ambas coordenadas, usa tu ubicación o elige un punto en el mapa."
+    : geocoding
+    ? "Buscando la dirección en el mapa…"
+    : geocodeMessage
+      ? geocodeMessage
+      : selectedPosition
+        ? `Pin ubicado en ${draft.latitude}, ${draft.longitude}. Verifica o ajusta la posición en el mapa.`
+        : "Ingresa ambas coordenadas, usa tu ubicación o elige un punto en el mapa.";
 
   const setToken = useCallback((token: string) => setTurnstileToken(token), []);
 
@@ -104,6 +125,87 @@ export function ReportDialog({
     };
   }, []);
 
+  useEffect(() => {
+    const address = draft.address.trim();
+    const city = draft.city.trim();
+    const state = draft.state.trim();
+    if (address.length < 5 || city.length < 2 || state.length < 2) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      setGeocoding(true);
+      setGeocodeMessage("");
+      try {
+        const params = new URLSearchParams({ address, city, state });
+        const response = await fetch(`/api/geocode?${params}`, {
+          signal: controller.signal,
+        });
+        const result = (await response.json()) as {
+          found?: boolean;
+          latitude?: number;
+          longitude?: number;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(result.error ?? "No fue posible buscar la dirección.");
+        }
+        if (
+          result.found &&
+          typeof result.latitude === "number" &&
+          typeof result.longitude === "number"
+        ) {
+          const nextLatitude = result.latitude.toFixed(6);
+          const nextLongitude = result.longitude.toFixed(6);
+          lastAutoLocationRef.current = {
+            latitude: nextLatitude,
+            longitude: nextLongitude,
+          };
+          setDraft((current) => ({
+            ...current,
+            latitude: nextLatitude,
+            longitude: nextLongitude,
+          }));
+          setGeocodeMessage(
+            "Ubicación sugerida a partir de la dirección. Verifica el pin o ajústalo en el mapa.",
+          );
+          return;
+        }
+
+        setDraft((current) => {
+          const autoLocation = lastAutoLocationRef.current;
+          if (
+            autoLocation &&
+            current.latitude === autoLocation.latitude &&
+            current.longitude === autoLocation.longitude
+          ) {
+            lastAutoLocationRef.current = null;
+            return { ...current, latitude: "", longitude: "" };
+          }
+          return current;
+        });
+        setGeocodeMessage(
+          "No pudimos encontrar esa dirección en el mapa. Marca la ubicación manualmente en el mapa.",
+        );
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setGeocodeMessage(
+          caught instanceof Error
+            ? `${caught.message} Marca la ubicación manualmente en el mapa.`
+            : "No pudimos encontrar esa dirección. Marca la ubicación manualmente en el mapa.",
+        );
+      } finally {
+        if (!controller.signal.aborted) setGeocoding(false);
+      }
+    }, 800);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [draft.address, draft.city, draft.state]);
+
   function updateDraft<K extends keyof ReportDraft>(
     field: K,
     value: ReportDraft[K]
@@ -112,6 +214,8 @@ export function ReportDialog({
   }
 
   function selectLocation(latitude: number, longitude: number) {
+    lastAutoLocationRef.current = null;
+    setGeocodeMessage("");
     setDraft((current) => ({
       ...current,
       latitude: latitude.toFixed(6),
@@ -217,6 +321,8 @@ export function ReportDialog({
       onCreated(result.report);
       setSuccess("Reporte publicado correctamente.");
       setDraft(emptyReportDraft);
+      lastAutoLocationRef.current = null;
+      setGeocodeMessage("");
       setLocationFieldsKey((current) => current + 1);
       images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setImages([]);
@@ -337,9 +443,7 @@ export function ReportDialog({
             </label>
           </div>
           <p className="field-help location-help" aria-live="polite">
-            {selectedPosition
-              ? `Pin ubicado en ${draft.latitude}, ${draft.longitude}. Verifica o ajusta la posición en el mapa.`
-              : "Ingresa ambas coordenadas, usa tu ubicación o elige un punto en el mapa."}
+            {locationHelpMessage}
           </p>
           <div className={cn("location-picker", selectingLocation && "active")}>
             <DamageMapClient
