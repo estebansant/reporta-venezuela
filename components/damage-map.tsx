@@ -120,7 +120,7 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
 
     const canvas = L.DomUtil.create(
       "canvas",
-      "damage-reports-canvas leaflet-zoom-animated",
+      "damage-reports-canvas leaflet-zoom-animated"
     ) as HTMLCanvasElement;
     const context = canvas.getContext("2d");
     const pane = map.getPanes().overlayPane;
@@ -410,7 +410,7 @@ function DamageZonesLayer({
     let lastSignature = "";
     function reportSources(zones: DamageZone[]) {
       const sources = Array.from(
-        new Set(zones.map((zone) => zone.sourceName)),
+        new Set(zones.map((zone) => zone.sourceName))
       ).sort();
       const signature = sources.join("|");
       if (signature === lastSignature) return;
@@ -456,7 +456,8 @@ function DamageZonesLayer({
         const contours: ContourRing[] = [];
         const polygonsByCategory = new Map<DamageZoneCategory, GeoPolygon[]>();
         for (const zone of data.zones) {
-          const geometryType = (zone.geometry as { type?: string } | null)?.type;
+          const geometryType = (zone.geometry as { type?: string } | null)
+            ?.type;
           const isContour =
             geometryType === "LineString" || geometryType === "MultiLineString";
           const polygons = geometryToPolygons(zone.geometry);
@@ -525,10 +526,10 @@ function DamageZonesLayer({
               style: {
                 stroke: false,
                 fillColor: zoneColors[contour.category],
-                fillOpacity: 0.4,
+                fillOpacity: 0.3,
                 fillRule: "evenodd",
               },
-            },
+            }
           ).addTo(layer);
         }
 
@@ -545,10 +546,10 @@ function DamageZonesLayer({
               style: {
                 color: zoneColors[boundary.category],
                 weight: 1.2,
-                opacity: 0.5,
+                opacity: 0.55,
                 fill: false,
               },
-            },
+            }
           ).addTo(layer);
         }
 
@@ -568,12 +569,12 @@ function DamageZonesLayer({
               style: {
                 color,
                 weight: 1,
-                opacity: 0.35,
+                opacity: 0.2,
                 fillColor: color,
-                fillOpacity: 0.3,
+                fillOpacity: 0.125,
                 fillRule: "nonzero",
               },
-            },
+            }
           ).addTo(layer);
         }
       } catch {
@@ -615,7 +616,7 @@ function MapEvents({
           south: String(bounds.getSouth()),
           east: String(bounds.getEast()),
           west: String(bounds.getWest()),
-        }).toString(),
+        }).toString()
       );
     },
   });
@@ -628,7 +629,7 @@ function MapEvents({
         south: String(bounds.getSouth()),
         east: String(bounds.getEast()),
         west: String(bounds.getWest()),
-      }).toString(),
+      }).toString()
     );
   }, [map, onBoundsChange]);
   return null;
@@ -642,7 +643,10 @@ function FlyToSelection({
   const map = useMap();
   useEffect(() => {
     if (position) {
-      map.flyTo([position.latitude, position.longitude], Math.max(map.getZoom(), 14));
+      map.flyTo(
+        [position.latitude, position.longitude],
+        Math.max(map.getZoom(), 14)
+      );
     }
   }, [map, position]);
   return null;
