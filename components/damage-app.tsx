@@ -23,6 +23,7 @@ export function DamageApp() {
   const [verifiedBySatelliteOnly, setVerifiedBySatelliteOnly] = useState(false);
   const [state, setState] = useState("all");
   const [bounds, setBounds] = useState("");
+  const [zoneSources, setZoneSources] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number | null>(null);
   const [total, setTotal] = useState(0);
@@ -207,7 +208,9 @@ export function DamageApp() {
         loading={mapLoading}
         affectedStates={affectedStates}
         visibleReportCount={visibleReportCount}
+        zoneSources={zoneSources}
         onBoundsChange={handleBoundsChange}
+        onZoneSourcesChange={setZoneSources}
         onCreated={handleReportCreated}
       />
       <DirectorySection

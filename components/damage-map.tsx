@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import type { CSSProperties } from "react";
 import {
   MapContainer,
   Marker,
@@ -41,16 +40,6 @@ const zoneColors: Record<DamageZoneCategory, string> = {
   high: "#b53a24",
   severe: "#7f1d1d",
 };
-
-const damageZoneLegendItems: {
-  category: DamageZoneCategory;
-  label: string;
-}[] = [
-  { category: "low", label: "Daño bajo" },
-  { category: "moderate", label: "Daño moderado" },
-  { category: "high", label: "Daño alto" },
-  { category: "severe", label: "Daño severo" },
-];
 
 // Exact lucide "satellite-dish" paths (24x24 viewBox), reused for the canvas pin.
 const satelliteDishPaths = [
@@ -307,10 +296,128 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
   return null;
 }
 
-function DamageZonesLayer() {
+// Render order: low → severe, so the most severe band ends up drawn on top.
+const damageZoneRenderOrder: DamageZoneCategory[] = [
+  "low",
+  "moderate",
+  "high",
+  "severe",
+];
+
+type GeoRing = number[][];
+type GeoPolygon = GeoRing[]; // [outerRing, ...holes]
+
+// Close an open contour ring so it can be filled as an area (USGS MMI contours
+// are closed rings already; this is a defensive no-op for them).
+function closeRing(line: GeoRing): GeoRing | null {
+  if (!Array.isArray(line) || line.length < 3) return null;
+  const first = line[0];
+  const last = line[line.length - 1];
+  if (first[0] === last[0] && first[1] === last[1]) return line;
+  return [...line, first];
+}
+
+// Normalize any zone geometry to fillable polygons. Copernicus/ARIA are already
+// polygons; USGS ShakeMap intensity contours arrive as (closed) MultiLineStrings.
+function geometryToPolygons(geometry: DamageZone["geometry"]): GeoPolygon[] {
+  if (!geometry || typeof geometry !== "object") return [];
+  const geom = geometry as { type?: string; coordinates?: unknown };
+  switch (geom.type) {
+    case "Polygon":
+      return [geom.coordinates as GeoPolygon];
+    case "MultiPolygon":
+      return geom.coordinates as GeoPolygon[];
+    case "LineString": {
+      const ring = closeRing(geom.coordinates as GeoRing);
+      return ring ? [[ring]] : [];
+    }
+    case "MultiLineString":
+      return (geom.coordinates as GeoRing[])
+        .map(closeRing)
+        .filter((ring): ring is GeoRing => Boolean(ring))
+        .map((ring) => [ring]);
+    default:
+      return [];
+  }
+}
+
+// Signed-area magnitude of a ring (shoelace), used to order nested contours
+// outermost-first (largest area = lowest intensity = outer boundary).
+function ringArea(ring: GeoRing): number {
+  let area = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    area += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+  }
+  return Math.abs(area / 2);
+}
+
+type Bbox = [number, number, number, number]; // [minX, minY, maxX, maxY]
+
+function ringBbox(ring: GeoRing): Bbox {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+function bboxContains(outer: Bbox, inner: Bbox): boolean {
+  return (
+    outer[0] <= inner[0] &&
+    outer[1] <= inner[1] &&
+    outer[2] >= inner[2] &&
+    outer[3] >= inner[3]
+  );
+}
+
+// Ray-casting point-in-ring test, to decide true geometric nesting of contours
+// (bbox overlap alone gives false positives for separate shaking lobes).
+function pointInRing(point: number[], ring: GeoRing): boolean {
+  const [x, y] = point;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersects =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+interface ContourRing {
+  ring: GeoRing;
+  category: DamageZoneCategory;
+  area: number;
+  bbox: Bbox;
+}
+
+function DamageZonesLayer({
+  onZoneSourcesChange,
+}: {
+  onZoneSourcesChange?: (sources: string[]) => void;
+}) {
   const map = useMap();
 
   useEffect(() => {
+    // Track the last reported set so we only notify the parent on real changes.
+    let lastSignature = "";
+    function reportSources(zones: DamageZone[]) {
+      const sources = Array.from(
+        new Set(zones.map((zone) => zone.sourceName)),
+      ).sort();
+      const signature = sources.join("|");
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+      onZoneSourcesChange?.(sources);
+    }
+
     if (!map.getPane("damage-zones")) {
       map.createPane("damage-zones");
     }
@@ -337,22 +444,137 @@ function DamageZonesLayer() {
         if (!response.ok || aborted) return;
         const data = (await response.json()) as { zones: DamageZone[] };
         if (aborted) return;
+        reportSources(data.zones);
         layer.clearLayers();
+
+        // Two kinds of zones need different treatment:
+        //  - Nested contour rings (USGS ShakeMap MMI): fill the annulus between
+        //    each contour and the next one inward, so every enclosed band is
+        //    painted by its grade and only the outermost ring stays a boundary.
+        //  - Plain damage polygons (Copernicus EMS, ARIA): solid fill, merged
+        //    per intensity so cross-source overlaps don't compound opacity.
+        const contours: ContourRing[] = [];
+        const polygonsByCategory = new Map<DamageZoneCategory, GeoPolygon[]>();
         for (const zone of data.zones) {
-          if (!zone.geometry) continue;
-          const color = zoneColors[zone.damageCategory];
-          const shape = L.geoJSON(zone.geometry as GeoJSON.GeoJsonObject, {
-            interactive: false,
-            pane: "damage-zones",
-            style: {
-              color,
-              weight: 1,
-              opacity: 0.4,
-              fillColor: color,
-              fillOpacity: 0.25,
+          const geometryType = (zone.geometry as { type?: string } | null)?.type;
+          const isContour =
+            geometryType === "LineString" || geometryType === "MultiLineString";
+          const polygons = geometryToPolygons(zone.geometry);
+          if (!polygons.length) continue;
+          if (isContour) {
+            for (const polygon of polygons) {
+              const ring = polygon[0];
+              contours.push({
+                ring,
+                category: zone.damageCategory,
+                area: ringArea(ring),
+                bbox: ringBbox(ring),
+              });
+            }
+          } else {
+            const existing = polygonsByCategory.get(zone.damageCategory) ?? [];
+            existing.push(...polygons);
+            polygonsByCategory.set(zone.damageCategory, existing);
+          }
+        }
+
+        // Build a containment tree: each contour's parent is the smallest
+        // contour that strictly contains it. A contour is then filled over its
+        // own area with its direct children punched out as holes, so every
+        // enclosed band shows the grade it crosses into and bands never overlap.
+        contours.sort((a, b) => a.area - b.area); // smallest first
+        const childRings = new Map<ContourRing, GeoRing[]>();
+        const topLevel: ContourRing[] = [];
+        for (let i = 0; i < contours.length; i += 1) {
+          const child = contours[i];
+          let parent: ContourRing | null = null;
+          for (let j = i + 1; j < contours.length; j += 1) {
+            const candidate = contours[j]; // larger area than child
+            if (
+              bboxContains(candidate.bbox, child.bbox) &&
+              pointInRing(child.ring[0], candidate.ring)
+            ) {
+              parent = candidate; // first (smallest) container wins
+              break;
+            }
+          }
+          if (parent) {
+            const holes = childRings.get(parent) ?? [];
+            holes.push(child.ring);
+            childRings.set(parent, holes);
+          } else {
+            topLevel.push(child);
+          }
+        }
+
+        // Draw outermost (largest) first so inner bands paint on top.
+        for (let i = contours.length - 1; i >= 0; i -= 1) {
+          const contour = contours[i];
+          const rings: GeoPolygon = [
+            contour.ring,
+            ...(childRings.get(contour) ?? []),
+          ];
+          L.geoJSON(
+            {
+              type: "Polygon",
+              coordinates: rings as GeoJSON.Position[][],
+            } as GeoJSON.Polygon,
+            {
+              interactive: false,
+              pane: "damage-zones",
+              style: {
+                stroke: false,
+                fillColor: zoneColors[contour.category],
+                fillOpacity: 0.4,
+                fillRule: "evenodd",
+              },
             },
-          });
-          shape.addTo(layer);
+          ).addTo(layer);
+        }
+
+        // Outermost contours kept as the visible boundary of each shaken lobe.
+        for (const boundary of topLevel) {
+          L.geoJSON(
+            {
+              type: "Polygon",
+              coordinates: [boundary.ring] as GeoJSON.Position[][],
+            } as GeoJSON.Polygon,
+            {
+              interactive: false,
+              pane: "damage-zones",
+              style: {
+                color: zoneColors[boundary.category],
+                weight: 1.2,
+                opacity: 0.5,
+                fill: false,
+              },
+            },
+          ).addTo(layer);
+        }
+
+        // Plain damage polygons, merged per intensity (severe drawn on top).
+        for (const category of damageZoneRenderOrder) {
+          const polygons = polygonsByCategory.get(category);
+          if (!polygons?.length) continue;
+          const color = zoneColors[category];
+          L.geoJSON(
+            {
+              type: "MultiPolygon",
+              coordinates: polygons as GeoJSON.Position[][][],
+            } as GeoJSON.MultiPolygon,
+            {
+              interactive: false,
+              pane: "damage-zones",
+              style: {
+                color,
+                weight: 1,
+                opacity: 0.35,
+                fillColor: color,
+                fillOpacity: 0.3,
+                fillRule: "nonzero",
+              },
+            },
+          ).addTo(layer);
         }
       } catch {
         // ignore network errors; zones are non-critical
@@ -367,27 +589,9 @@ function DamageZonesLayer() {
       map.off("moveend", load);
       layer.remove();
     };
-  }, [map]);
+  }, [map, onZoneSourcesChange]);
 
   return null;
-}
-
-function DamageZonesLegend() {
-  return (
-    <div className="map-legend damage-zone-legend" aria-label="Leyenda de zonas de daño">
-      <p>Zonas Copernicus EMS</p>
-      {damageZoneLegendItems.map((item) => (
-        <div key={item.category}>
-          <span
-            className="damage-zone-swatch"
-            style={{ "--zone-color": zoneColors[item.category] } as CSSProperties}
-            aria-hidden="true"
-          />
-          {item.label}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function MapEvents({
@@ -450,12 +654,14 @@ export function DamageMap({
   selectedPosition,
   onSelect,
   onBoundsChange,
+  onZoneSourcesChange,
 }: {
   reports?: MapItem[];
   selecting?: boolean;
   selectedPosition?: { latitude: number; longitude: number } | null;
   onSelect?: (latitude: number, longitude: number) => void;
   onBoundsChange?: (bounds: string) => void;
+  onZoneSourcesChange?: (sources: string[]) => void;
 }) {
   return (
     <MapContainer
@@ -475,9 +681,8 @@ export function DamageMap({
         onBoundsChange={onBoundsChange}
       />
       <FlyToSelection position={selectedPosition} />
-      <DamageZonesLayer />
+      <DamageZonesLayer onZoneSourcesChange={onZoneSourcesChange} />
       <DamageReportsCanvasLayer reports={reports} />
-      <DamageZonesLegend />
       {selectedPosition ? (
         <Marker
           position={[selectedPosition.latitude, selectedPosition.longitude]}

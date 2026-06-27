@@ -1,0 +1,44 @@
+{
+  "generatedAt": "2026-06-27T02:09:53.760Z",
+  "aoiBbox": [
+    -70,
+    9.5,
+    -66,
+    11
+  ],
+  "windows": {
+    "preFrom": "2026-01-01",
+    "preBefore": "2026-06-23",
+    "postFrom": "2026-06-24",
+    "postUntil": "2026-06-27"
+  },
+  "providers": {
+    "umbra": {
+      "keysListed": 0,
+      "inWindow": 0,
+      "fetched": 0,
+      "intersecting": 0,
+      "matchedPre": 0,
+      "matchedPost": 0,
+      "skippedNoCog": 0
+    },
+    "iceye": {
+      "keysListed": 32,
+      "inWindow": 32,
+      "fetched": 32,
+      "intersecting": 0,
+      "matchedPre": 0,
+      "matchedPost": 0,
+      "skippedNoCog": 0
+    }
+  },
+  "summary": {
+    "scenes": 0,
+    "pre": 0,
+    "post": 0,
+    "pairs": 0,
+    "pairsWithPre": 0
+  },
+  "pairs": [],
+  "scenes": []
+}

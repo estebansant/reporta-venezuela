@@ -602,10 +602,7 @@ async function runZonesLocalTier(
   summary: Summary,
 ) {
   const root = options.localProducts ?? "EMSR884_products";
-  const products = [
-    ...(await loadLocalProductFeatures(root, "builtUpA_v1.json", summary)),
-    ...(await loadLocalProductFeatures(root, "areaOfInterestA_v1.json", summary)),
-  ];
+  const products = await loadLocalProductFeatures(root, "builtUpA_v1.json", summary);
   const zones: DamageZoneRecord[] = [];
   const seenZones = new Set<string>();
 

@@ -14,6 +14,7 @@
     "db:migrate:local": "wrangler d1 migrations apply terremoto-reports-local --local",
     "db:migrate:preview": "wrangler d1 migrations apply terremoto-reports-preview --remote --env preview",
     "db:migrate:production": "wrangler d1 migrations apply terremoto-reports --remote --env production",
+    "discover:sar": "tsx scripts/discover-sar-scenes.ts",
     "import:source": "tsx scripts/import-terremoto-source.ts",
     "import:satellite": "tsx scripts/import-satellite.ts",
     "import:satellite:ems": "tsx scripts/import-satellite.ts --tier ems",

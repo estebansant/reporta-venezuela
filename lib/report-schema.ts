@@ -136,6 +136,20 @@ export const damageZoneCategories = [
   "severe",
 ] as const;
 
+// Human labels for the authoritative sources that feed the damage_zones layer.
+// Used by the unified map legend to attribute whichever sources are in view.
+export const damageZoneSourceLabels: Record<string, string> = {
+  "copernicus-ems-area": "Copernicus EMS",
+  "copernicus-ems": "Copernicus EMS",
+  "usgs-shakemap": "USGS ShakeMap",
+  gdacs: "GDACS",
+  "aria-dpm": "ARIA (NASA/JPL)",
+};
+
+export function damageZoneSourceLabel(sourceName: string): string {
+  return damageZoneSourceLabels[sourceName] ?? sourceName;
+}
+
 export const zoneQuerySchema = z.object({
   north: z.coerce.number().min(-90).max(90).optional(),
   south: z.coerce.number().min(-90).max(90).optional(),

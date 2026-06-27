@@ -255,8 +255,8 @@ a {
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
 }
 .map-legend {
-  top: 5rem;
-  left: 1rem;
+  top: 1rem;
+  right: 1rem;
   min-width: 205px;
   padding: 0.9rem 1rem;
   pointer-events: none;
@@ -1707,8 +1707,8 @@ footer nav {
     max-height: 680px;
   }
   .map-legend {
-    top: 4.5rem;
-    left: 0.75rem;
+    top: 0.75rem;
+    right: 0.75rem;
     min-width: 180px;
     padding: 0.7rem 0.8rem;
   }
