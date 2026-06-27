@@ -134,6 +134,19 @@ pnpm import:satellite:ems-zones
 
 # Importar candidatos satelitales locales / Import local satellite candidates
 pnpm import:satellite:ems-local
+
+# Sentinel-2 medium-res pre/post change detection -> damage_zones
+pnpm detect:sentinel2 --write
+
+# ARIA DPM SAR -> damage_zones
+pnpm fetch:aria-dpm
+pnpm import:satellite:sar --dpm-url <archivo-dpm.tif> --write
+
+# Re-chequear gate SAR open-data
+pnpm discover:sar
+
+# Fusionar Sentinel-2/SAR/Shakemap/reportes/VHR -> satellite_candidates
+pnpm build:triage --aoi yaracuy --write
 ```
 
 ### Despliegue en Cloudflare / Cloudflare Deployment

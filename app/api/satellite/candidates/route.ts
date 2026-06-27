@@ -18,6 +18,8 @@ interface CandidateRow {
   score: number | null;
   chip_r2_key: string | null;
   chip_pre_r2_key: string | null;
+  vhr_scene_id: string | null;
+  vhr_r2_key: string | null;
   source_name: string;
   source_id: string;
   state: string | null;
@@ -44,7 +46,8 @@ export async function GET(request: Request) {
 
   const result = await DB.prepare(
     `SELECT id, latitude, longitude, suggested_damage_type, score,
-      chip_r2_key, chip_pre_r2_key, source_name, source_id, state, city, note, created_at
+      chip_r2_key, chip_pre_r2_key, vhr_scene_id, vhr_r2_key,
+      source_name, source_id, state, city, note, created_at
      FROM satellite_candidates
      WHERE status = 'pending'
      ORDER BY score DESC, created_at DESC
@@ -65,6 +68,8 @@ export async function GET(request: Request) {
     createdAt: row.created_at,
     chipUrl: row.chip_r2_key ? `/media/${row.chip_r2_key}` : null,
     chipPreUrl: row.chip_pre_r2_key ? `/media/${row.chip_pre_r2_key}` : null,
+    vhrSceneId: row.vhr_scene_id,
+    vhrUrl: row.vhr_r2_key ? `/imagery/${row.vhr_r2_key}` : null,
   }));
 
   return Response.json(

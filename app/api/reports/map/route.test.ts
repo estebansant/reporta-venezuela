@@ -63,6 +63,14 @@ vi.mock("@/lib/cloudflare", () => ({
                     })),
                   };
                 }
+                if (sql.includes("NULL AS chip_image_id")) {
+                  return {
+                    results: mocks.results.map((row) => ({
+                      ...row,
+                      chip_image_id: null,
+                    })),
+                  };
+                }
                 return { results: mocks.results };
               },
             };
@@ -128,7 +136,8 @@ describe("/api/reports/map", () => {
       "public, max-age=30, s-maxage=60, stale-while-revalidate=120",
     );
     expect(mocks.sql).toContain("FROM reports r");
-    expect(mocks.sql).toContain("LEFT JOIN report_images i");
+    expect(mocks.sql).not.toContain("LEFT JOIN report_images i");
+    expect(mocks.sql).toContain("NULL AS chip_image_id");
     expect(mocks.sql).toContain("status = 'published'");
     expect(mocks.sql).toContain("latitude BETWEEN ? AND ?");
     expect(mocks.sql).toContain("damage_type IN (?,?)");
@@ -159,11 +168,31 @@ describe("/api/reports/map", () => {
       needsHelp: true,
       createdAt: "2026-06-26T12:00:00.000Z",
       verifiedBySatellite: true,
-      verifiedChipUrl: "/media/reports/report-1/img-1.webp",
+      verifiedChipUrl: null,
     });
     expect(report).not.toHaveProperty("images");
     expect(report).not.toHaveProperty("description");
     expect(report).not.toHaveProperty("contactPhone");
+  });
+
+  it("can opt into satellite chip ids when a caller needs popup imagery", async () => {
+    mocks.sqls = [];
+    mocks.failFirstQueryWith = null;
+
+    const response = await GET(
+      new Request(
+        "https://example.com/api/reports/map?north=11&south=10&east=-66&west=-67&includeChips=true",
+      ),
+    );
+    const body = (await response.json()) as { reports: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(mocks.sql).toContain("LEFT JOIN report_images i");
+    expect(mocks.sql).toContain("i.id AS chip_image_id");
+    expect(body.reports[0]).toMatchObject({
+      verifiedBySatellite: true,
+      verifiedChipUrl: "/media/reports/report-1/img-1.webp",
+    });
   });
 
   it("groups nearby reports into a single map incident", async () => {

@@ -27,6 +27,7 @@ import {
   fetchWithTimeout,
   getWranglerTarget,
   progress,
+  runWrangler,
   sqlNumber,
   sqlString,
   uploadImage,
@@ -44,7 +45,15 @@ type Tier =
   | "maxar"
   | "sar"
   | "usgs"
-  | "gdacs";
+  | "gdacs"
+  | "vhr";
+
+// MAP_TILES bucket names per env (mirrors wrangler.jsonc r2_buckets[1]).
+const MAP_TILES_BUCKET: Record<string, string> = {
+  local: "terremoto-map-tiles-local",
+  preview: "terremoto-map-tiles-preview",
+  production: "terremoto-map-tiles",
+};
 
 const CHIP_HALF_PX = 64;
 const MAX_WEBP_BYTES = 20 * 1024 * 1024;
@@ -70,6 +79,15 @@ interface CliOptions {
   maxarCog?: string;
   autoScoreThreshold: number;
   limit?: number;
+  // vhr tier
+  cogPath?: string;
+  provider?: string;
+  phase?: "pre" | "post";
+  sceneId?: string;
+  datetime?: string;
+  resolutionM?: number;
+  license?: string;
+  collection?: string;
 }
 
 interface Summary {
@@ -128,10 +146,11 @@ function parseArgs(argv: string[]): CliOptions {
           "sar",
           "usgs",
           "gdacs",
+          "vhr",
         ].includes(tier)
       ) {
         throw new Error(
-          "--tier debe ser ems, ems-local, ems-zones, zones-local, candidates, maxar, sar, usgs o gdacs.",
+          "--tier debe ser ems, ems-local, ems-zones, zones-local, candidates, maxar, sar, usgs, gdacs o vhr.",
         );
       }
       options.tier = tier as Tier;
@@ -186,6 +205,28 @@ function parseArgs(argv: string[]): CliOptions {
       options.limit = limit;
     } else if (arg === "--confirm-production") {
       options.confirmProduction = true;
+    } else if (arg === "--cog-path") {
+      options.cogPath = next();
+    } else if (arg === "--provider") {
+      options.provider = next();
+    } else if (arg === "--phase") {
+      const p = next();
+      if (p !== "pre" && p !== "post")
+        throw new Error("--phase debe ser pre o post.");
+      options.phase = p;
+    } else if (arg === "--scene-id") {
+      options.sceneId = next();
+    } else if (arg === "--datetime") {
+      options.datetime = next();
+    } else if (arg === "--resolution-m") {
+      const v = Number(next());
+      if (!Number.isFinite(v) || v <= 0)
+        throw new Error("--resolution-m debe ser un número positivo.");
+      options.resolutionM = v;
+    } else if (arg === "--license") {
+      options.license = next();
+    } else if (arg === "--collection") {
+      options.collection = next();
     } else {
       throw new Error(`Argumento desconocido: ${arg}`);
     }
@@ -884,6 +925,96 @@ async function runMaxarTier(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tier VHR — register a local COG in imagery_scenes + upload to MAP_TILES R2
+// ---------------------------------------------------------------------------
+
+async function runVhrTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const cogPath = options.cogPath;
+  const provider = options.provider;
+  if (!cogPath) throw new Error("Tier vhr requiere --cog-path <archivo.tif>.");
+  if (!provider) throw new Error("Tier vhr requiere --provider <nombre>.");
+
+  progress(`VHR: leyendo metadatos de ${cogPath}`);
+  const tiff = await fromUrl(cogPath);
+  const image = await tiff.getImage();
+  const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY] in CRS units
+  const crs = String(image.geoKeys?.ProjectedCSTypeGeoKey ?? image.geoKeys?.GeographicTypeGeoKey ?? "");
+
+  // For images in EPSG:4326 the bbox is already [minLng, minLat, maxLng, maxLat].
+  // For projected CRS the values may not be in degrees; we store as-is and let
+  // the API bbox filter use the same units as the stored columns.
+  const [minLng, minLat, maxLng, maxLat] = [bbox[0], bbox[1], bbox[2], bbox[3]];
+
+  const sceneId =
+    options.sceneId ??
+    path.basename(cogPath, path.extname(cogPath)).replace(/[^a-zA-Z0-9_-]/g, "-");
+  const assetName = path.basename(cogPath);
+  const r2Key = `imagery/${sceneId}/${assetName}`;
+  const now = new Date().toISOString();
+
+  const sql = `INSERT INTO imagery_scenes (
+      scene_id, collection, provider, license, phase, datetime,
+      min_lat, max_lat, min_lng, max_lng, cloud_cover, crs, resolution_m, r2_key, created_at
+    ) VALUES (
+      ${sqlString(sceneId)}, ${sqlString(options.collection ?? null)}, ${sqlString(provider)},
+      ${sqlString(options.license ?? null)}, ${sqlString(options.phase ?? null)},
+      ${sqlString(options.datetime ?? null)},
+      ${sqlNumber(minLat)}, ${sqlNumber(maxLat)}, ${sqlNumber(minLng)}, ${sqlNumber(maxLng)},
+      NULL, ${sqlString(crs || null)}, ${options.resolutionM !== undefined ? sqlNumber(options.resolutionM) : "NULL"},
+      ${sqlString(r2Key)}, ${sqlString(now)}
+    )
+    ON CONFLICT(scene_id) DO UPDATE SET
+      provider = excluded.provider, license = excluded.license,
+      phase = excluded.phase, datetime = excluded.datetime,
+      min_lat = excluded.min_lat, max_lat = excluded.max_lat,
+      min_lng = excluded.min_lng, max_lng = excluded.max_lng,
+      crs = excluded.crs, resolution_m = excluded.resolution_m,
+      r2_key = excluded.r2_key;`;
+
+  summary.fetched = 1;
+
+  if (options.dryRun) {
+    progress(`VHR (dry-run): ${sceneId} → ${r2Key}`);
+    progress(`  bbox: [${minLng}, ${minLat}, ${maxLng}, ${maxLat}]`);
+    return;
+  }
+
+  // Upload COG to MAP_TILES R2 bucket.
+  const mapTilesBucket = MAP_TILES_BUCKET[target.env];
+  if (!mapTilesBucket) throw new Error(`Env ${target.env} sin bucket MAP_TILES.`);
+
+  const r2Args =
+    target.env === "local"
+      ? ["r2", "object"]
+      : ["r2", "object", "--env", target.env];
+
+  const uploadArgs = [
+    ...r2Args,
+    "put",
+    `${mapTilesBucket}/${r2Key}`,
+    "--file",
+    cogPath,
+    "--content-type",
+    "image/tiff",
+    "--cache-control",
+    "public, max-age=31536000, immutable",
+  ];
+  if (target.env === "local") uploadArgs.push("--local");
+  else uploadArgs.push("--remote", "--force");
+
+  progress(`R2: subiendo ${r2Key} → ${mapTilesBucket}`);
+  await runWrangler(uploadArgs);
+
+  await d1ExecFile(target, sql);
+  summary.created = 1;
+  progress(`VHR: escena ${sceneId} registrada. URL: /imagery/${sceneId}/${assetName}`);
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const summary: Summary = {
@@ -913,6 +1044,7 @@ async function main() {
   else if (options.tier === "sar") await runSarTier(target, options, summary);
   else if (options.tier === "usgs") await runUsgsTier(target, options, summary);
   else if (options.tier === "gdacs") await runGdacsTier(target, options, summary);
+  else if (options.tier === "vhr") await runVhrTier(target, options, summary);
   else await runMaxarTier(target, options, summary);
 
   console.log(

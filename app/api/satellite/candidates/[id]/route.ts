@@ -10,6 +10,24 @@ import type { DamageType } from "@/lib/report-schema";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const VALID_REVIEW_STATUSES = new Set([
+  "reported",
+  "triaged_by_satellite",
+  "externally_corroborated",
+  "verified_collapsed",
+  "verified_damaged",
+  "rejected_unclear",
+]);
+
+// Sources whose resolution warrants verified_collapsed / verified_damaged.
+const VHR_SOURCES = new Set([
+  "maxar-open-data",
+  "ms-ai-for-good",
+  "copernicus-ems",
+  "copernicus-ems-area",
+  "unosat",
+]);
+
 interface CandidateRow {
   id: string;
   latitude: number;
@@ -54,7 +72,10 @@ export async function PATCH(
 
   const body = (await request.json().catch(() => null)) as {
     action?: string;
+    reviewStatus?: string;
+    evidenceNote?: string;
   } | null;
+
   const action = body?.action;
   if (action !== "approve" && action !== "reject") {
     return jsonError("Acción inválida. Usa 'approve' o 'reject'.", 400);
@@ -91,15 +112,23 @@ export async function PATCH(
     );
   }
 
-  // approve -> publish a satellite-verified report
+  // approve → publish a satellite-verified report
+  const isVhr = VHR_SOURCES.has(candidate.source_name);
+  const requestedStatus = body?.reviewStatus;
+  const reviewStatus =
+    requestedStatus && VALID_REVIEW_STATUSES.has(requestedStatus)
+      ? requestedStatus
+      : isVhr
+        ? "triaged_by_satellite"
+        : "triaged_by_satellite";
+
   const reportId = candidate.chip_report_id ?? crypto.randomUUID();
   const city = candidate.city?.trim() || "Zona afectada";
   const state = candidate.state?.trim() || "Venezuela";
   const address = `${city}, ${state}`.slice(0, 240);
-  const buildingName = (candidate.note?.trim() || "Edificio detectado por satélite").slice(
-    0,
-    120,
-  );
+  const buildingName = (
+    candidate.note?.trim() || "Edificio detectado por satélite"
+  ).slice(0, 120);
   const description =
     "Daño detectado mediante análisis de imagen satelital y confirmado en revisión manual.";
 
@@ -109,8 +138,9 @@ export async function PATCH(
         id, building_name, address, state, city, latitude, longitude,
         damage_type, needs_help, description, contact_consent, status,
         created_at, updated_at, verified_by_satellite, verified_at,
-        verified_source, verified_source_id, source_name, source_id, source_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 'published', ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+        verified_source, verified_source_id, source_name, source_id, source_url,
+        review_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 'published', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       reportId,
       buildingName,
@@ -129,6 +159,7 @@ export async function PATCH(
       candidate.source_name,
       candidate.source_id,
       null,
+      reviewStatus,
     ),
     DB.prepare(
       `UPDATE satellite_candidates
@@ -163,8 +194,31 @@ export async function PATCH(
 
   await DB.batch(statements);
 
+  // Insert evidence row — best-effort (table may not exist if migration 0015 is pending).
+  const evidenceId = crypto.randomUUID();
+  try {
+    await DB.prepare(
+      `INSERT INTO verification_evidence
+         (id, report_id, source_name, source_id, evidence_type, chip_r2_key, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        evidenceId,
+        reportId,
+        candidate.source_name,
+        candidate.source_id,
+        "satellite-detection",
+        candidate.chip_r2_key ?? null,
+        body?.evidenceNote?.trim() || null,
+        now,
+      )
+      .run();
+  } catch {
+    // Silently skip — migration 0015 not yet applied.
+  }
+
   return Response.json(
-    { candidate: { id, status: "approved", reportId } },
+    { candidate: { id, status: "approved", reportId, reviewStatus } },
     { headers: jsonHeaders({ "Cache-Control": "no-store" }) },
   );
 }

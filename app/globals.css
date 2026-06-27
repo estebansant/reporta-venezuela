@@ -301,6 +301,45 @@ a {
   border-radius: 50%;
   outline: 1px solid currentColor;
 }
+.vhr-opacity-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 154px;
+  padding: 0.65rem 0.75rem;
+  background: color-mix(in srgb, var(--cream-paper) 96%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+}
+.vhr-opacity-label {
+  color: var(--ink);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.vhr-opacity-slider {
+  width: 100%;
+  accent-color: var(--terracotta);
+  cursor: pointer;
+}
+.vhr-scene-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 154px;
+  padding: 0.65rem 0.75rem;
+  background: color-mix(in srgb, var(--cream-paper) 96%, transparent);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+}
+.vhr-scene-select {
+  width: 100%;
+  font-size: 0.7rem;
+  color: var(--ink);
+  background: var(--cream-paper);
+  border: 1px solid color-mix(in srgb, var(--ink) 20%, transparent);
+  border-radius: 4px;
+  padding: 0.25rem 0.3rem;
+  cursor: pointer;
+  accent-color: var(--terracotta);
+}
 .damage-zone-legend {
   color: var(--ink);
   position: static;

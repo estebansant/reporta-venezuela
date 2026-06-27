@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import {
   MapContainer,
   Marker,
@@ -11,6 +11,11 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 
+import { BuildingsLayer } from "@/components/damage-app/map/BuildingsLayer";
+import { CogOverlay } from "@/components/damage-app/map/CogOverlay";
+import type { MapViewport } from "@/components/damage-app/types";
+
+import { mapTilesPath, type MapTilesManifest } from "@/lib/map-tiles";
 import type {
   DamageType,
   DamageZone,
@@ -40,6 +45,21 @@ const zoneColors: Record<DamageZoneCategory, string> = {
   high: "#b53a24",
   severe: "#7f1d1d",
 };
+
+const BOUNDS_PRECISION = 4;
+
+function boundsToSearchParams(
+  bounds: L.LatLngBounds,
+  extra?: Record<string, string>
+) {
+  return new URLSearchParams({
+    north: bounds.getNorth().toFixed(BOUNDS_PRECISION),
+    south: bounds.getSouth().toFixed(BOUNDS_PRECISION),
+    east: bounds.getEast().toFixed(BOUNDS_PRECISION),
+    west: bounds.getWest().toFixed(BOUNDS_PRECISION),
+    ...extra,
+  });
+}
 
 // Exact lucide "satellite-dish" paths (24x24 viewBox), reused for the canvas pin.
 const satelliteDishPaths = [
@@ -164,6 +184,7 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
       const { report, point, radius } = item;
       const verified = report.verifiedBySatellite;
       const isGroup = report.kind === "group";
+      const clusterRingWidth = isGroup ? 4 : 3;
 
       ctx.beginPath();
       ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -173,13 +194,20 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
           ? SATELLITE_BLUE
           : damageMarkerColors[report.damageType];
       ctx.fill();
-      ctx.lineWidth = 3;
+      ctx.lineWidth = clusterRingWidth;
       ctx.strokeStyle = report.needsHelp ? "#fff7ed" : "#ffffff";
       ctx.stroke();
 
       if (isGroup) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, radius + 5, 0, Math.PI * 2);
+        ctx.strokeStyle = report.needsHelp
+          ? "rgb(153 27 27 / 0.22)"
+          : "rgb(255 255 255 / 0.45)";
+        ctx.lineWidth = 5;
+        ctx.stroke();
         ctx.fillStyle = "#ffffff";
-        ctx.font = "800 12px sans-serif";
+        ctx.font = `${report.reportCount > 99 ? "800 11px" : "800 13px"} sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(String(report.reportCount), point.x, point.y + 0.5);
@@ -225,7 +253,11 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
           report.longitude,
         ]);
         const radius =
-          report.kind === "group" ? 18 : report.needsHelp ? 15 : 12;
+          report.kind === "group"
+            ? Math.min(30, 17 + Math.log2(report.reportCount) * 3)
+            : report.needsHelp
+              ? 15
+              : 12;
 
         if (
           point.x < -radius ||
@@ -306,6 +338,14 @@ const damageZoneRenderOrder: DamageZoneCategory[] = [
 
 type GeoRing = number[][];
 type GeoPolygon = GeoRing[]; // [outerRing, ...holes]
+type GeoJSONFeatureCollection = {
+  type: "FeatureCollection";
+  features?: Array<{
+    type: "Feature";
+    geometry?: unknown;
+    properties?: Record<string, unknown>;
+  }>;
+};
 
 // Close an open contour ring so it can be filled as an area (USGS MMI contours
 // are closed rings already; this is a defensive no-op for them).
@@ -339,6 +379,49 @@ function geometryToPolygons(geometry: DamageZone["geometry"]): GeoPolygon[] {
     default:
       return [];
   }
+}
+
+function zoneFromFeature(
+  feature: NonNullable<GeoJSONFeatureCollection["features"]>[number],
+): DamageZone | null {
+  const props = feature.properties;
+  if (!props?.id || typeof props.id !== "string") return null;
+  return {
+    id: props.id,
+    geometry: feature.geometry ?? null,
+    damageCategory:
+      typeof props.damageCategory === "string"
+        ? (props.damageCategory as DamageZoneCategory)
+        : typeof props.damage_category === "string"
+          ? (props.damage_category as DamageZoneCategory)
+          : "low",
+    score: typeof props.score === "number" ? props.score : 0,
+    sourceName:
+      typeof props.sourceName === "string"
+        ? props.sourceName
+        : typeof props.source_name === "string"
+          ? props.source_name
+          : "unknown",
+    acquiredAt:
+      typeof props.acquiredAt === "string"
+        ? props.acquiredAt
+        : typeof props.acquired_at === "string"
+          ? props.acquired_at
+          : null,
+  };
+}
+
+function ringIntersectsBounds(ring: GeoRing, bounds: L.LatLngBounds) {
+  for (const [lng, lat] of ring) {
+    if (bounds.contains([lat, lng])) return true;
+  }
+  return false;
+}
+
+function zoneIntersectsBounds(zone: DamageZone, bounds: L.LatLngBounds) {
+  return geometryToPolygons(zone.geometry).some((polygon) =>
+    polygon.some((ring) => ringIntersectsBounds(ring, bounds)),
+  );
 }
 
 // Signed-area magnitude of a ring (shoelace), used to order nested contours
@@ -429,22 +512,47 @@ function DamageZonesLayer({
 
     const layer = L.layerGroup().addTo(map);
     let aborted = false;
+    let baselineZones: DamageZone[] | null = null;
+
+    async function loadBaselineZones() {
+      if (baselineZones) return baselineZones;
+      const manifestResponse = await fetch("/tiles/manifest.json", {
+        headers: { Accept: "application/json" },
+      });
+      if (!manifestResponse.ok) return null;
+      const manifest = (await manifestResponse.json()) as MapTilesManifest;
+      const zonesResponse = await fetch(mapTilesPath(manifest.zones.geojson), {
+        headers: { Accept: "application/geo+json, application/json" },
+      });
+      if (!zonesResponse.ok) return null;
+      const geojson = (await zonesResponse.json()) as GeoJSONFeatureCollection;
+      baselineZones = (geojson.features ?? [])
+        .map(zoneFromFeature)
+        .filter((zone): zone is DamageZone => Boolean(zone));
+      return baselineZones;
+    }
 
     async function load() {
       const bounds = map.getBounds();
-      const params = new URLSearchParams({
-        north: String(bounds.getNorth()),
-        south: String(bounds.getSouth()),
-        east: String(bounds.getEast()),
-        west: String(bounds.getWest()),
+      const params = boundsToSearchParams(bounds, {
         limit: "500",
       });
       try {
-        const response = await fetch(`/api/zones?${params}`);
-        if (!response.ok || aborted) return;
-        const data = (await response.json()) as { zones: DamageZone[] };
+        const baseline = await loadBaselineZones().catch(() => null);
+        let zones: DamageZone[];
+        if (baseline) {
+          zones = baseline
+            .filter((zone) => zoneIntersectsBounds(zone, bounds))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 500);
+        } else {
+          const response = await fetch(`/api/zones?${params}`);
+          if (!response.ok || aborted) return;
+          const data = (await response.json()) as { zones: DamageZone[] };
+          zones = data.zones;
+        }
         if (aborted) return;
-        reportSources(data.zones);
+        reportSources(zones);
         layer.clearLayers();
 
         // Two kinds of zones need different treatment:
@@ -455,7 +563,7 @@ function DamageZonesLayer({
         //    per intensity so cross-source overlaps don't compound opacity.
         const contours: ContourRing[] = [];
         const polygonsByCategory = new Map<DamageZoneCategory, GeoPolygon[]>();
-        for (const zone of data.zones) {
+        for (const zone of zones) {
           const geometryType = (zone.geometry as { type?: string } | null)
             ?.type;
           const isContour =
@@ -598,40 +706,35 @@ function DamageZonesLayer({
 function MapEvents({
   selecting,
   onSelect,
-  onBoundsChange,
+  onViewportChange,
 }: {
   selecting: boolean;
   onSelect?: (latitude: number, longitude: number) => void;
-  onBoundsChange?: (bounds: string) => void;
+  onViewportChange?: (viewport: MapViewport) => void;
 }) {
+  const reportViewport = useCallback((map: L.Map) => {
+    const bounds = map.getBounds();
+    onViewportChange?.({
+      bounds: boundsToSearchParams(bounds).toString(),
+      zoom: map.getZoom(),
+    });
+  }, [onViewportChange]);
+
   const map = useMapEvents({
     click(event) {
       if (selecting) onSelect?.(event.latlng.lat, event.latlng.lng);
     },
     moveend() {
-      const bounds = map.getBounds();
-      onBoundsChange?.(
-        new URLSearchParams({
-          north: String(bounds.getNorth()),
-          south: String(bounds.getSouth()),
-          east: String(bounds.getEast()),
-          west: String(bounds.getWest()),
-        }).toString()
-      );
+      reportViewport(map);
+    },
+    zoomend() {
+      reportViewport(map);
     },
   });
 
   useEffect(() => {
-    const bounds = map.getBounds();
-    onBoundsChange?.(
-      new URLSearchParams({
-        north: String(bounds.getNorth()),
-        south: String(bounds.getSouth()),
-        east: String(bounds.getEast()),
-        west: String(bounds.getWest()),
-      }).toString()
-    );
-  }, [map, onBoundsChange]);
+    reportViewport(map);
+  }, [map, reportViewport]);
   return null;
 }
 
@@ -657,22 +760,28 @@ export function DamageMap({
   selecting = false,
   selectedPosition,
   onSelect,
-  onBoundsChange,
+  onViewportChange,
   onZoneSourcesChange,
   showDamageZones = true,
+  showBuildings = false,
+  cogUrl,
+  cogOpacity = 0.8,
 }: {
   reports?: MapItem[];
   selecting?: boolean;
   selectedPosition?: { latitude: number; longitude: number } | null;
   onSelect?: (latitude: number, longitude: number) => void;
-  onBoundsChange?: (bounds: string) => void;
+  onViewportChange?: (viewport: MapViewport) => void;
   onZoneSourcesChange?: (sources: string[]) => void;
   showDamageZones?: boolean;
+  showBuildings?: boolean;
+  cogUrl?: string;
+  cogOpacity?: number;
 }) {
   return (
     <MapContainer
-      center={[10.3547, -67.1924]}
-      zoom={10}
+      center={[10.5086, -66.8903]}
+      zoom={12}
       scrollWheelZoom
       className="h-full w-full"
       aria-label="Mapa interactivo de Venezuela con reportes de daños"
@@ -684,9 +793,11 @@ export function DamageMap({
       <MapEvents
         selecting={selecting}
         onSelect={onSelect}
-        onBoundsChange={onBoundsChange}
+        onViewportChange={onViewportChange}
       />
       <FlyToSelection position={selectedPosition} />
+      {showBuildings ? <BuildingsLayer url="/tiles/buildings.pmtiles" /> : null}
+      {cogUrl ? <CogOverlay url={cogUrl} opacity={cogOpacity} /> : null}
       {showDamageZones ? (
         <DamageZonesLayer onZoneSourcesChange={onZoneSourcesChange} />
       ) : null}

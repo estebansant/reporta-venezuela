@@ -75,6 +75,10 @@ function searchParamsToQuery(searchParams: URLSearchParams) {
   return query;
 }
 
+function shouldIncludeSatelliteChips(searchParams: URLSearchParams) {
+  return searchParams.get("includeChips") === "true";
+}
+
 export async function GET(request: Request) {
   const rateLimit = checkRateLimit(request, {
     namespace: "reports-map:get",
@@ -92,6 +96,7 @@ export async function GET(request: Request) {
   }
 
   const { DB } = await getCloudflareEnv();
+  const includeChips = shouldIncludeSatelliteChips(url.searchParams);
   const filters = [`status = 'published'`];
   const bindings: (string | number)[] = [];
   const query = parsed.data;
@@ -114,6 +119,10 @@ export async function GET(request: Request) {
   if (query.verifiedBySatellite) {
     filters.push("verified_by_satellite = 1");
   }
+  if (query.since) {
+    filters.push("created_at > ?");
+    bindings.push(query.since);
+  }
   if (
     query.north !== undefined &&
     query.south !== undefined &&
@@ -129,9 +138,9 @@ export async function GET(request: Request) {
     result = await DB.prepare(
       `SELECT r.id, r.building_name, r.address, r.state, r.city, r.latitude,
         r.longitude, r.damage_type, r.needs_help, r.created_at,
-        r.verified_by_satellite, i.id AS chip_image_id
+        r.verified_by_satellite, ${includeChips ? "i.id" : "NULL"} AS chip_image_id
        FROM reports r
-       LEFT JOIN report_images i ON i.report_id = r.id AND i.position = 0
+       ${includeChips ? "LEFT JOIN report_images i ON i.report_id = r.id AND i.position = 0" : ""}
        WHERE ${filters.join(" AND ")}
        ORDER BY r.created_at DESC
        LIMIT ?`,

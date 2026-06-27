@@ -18,3 +18,7 @@ export const emptyReportDraft = {
 
 export type ReportDraft = typeof emptyReportDraft;
 export type ReportCreatedHandler = (report: PublicReport) => void;
+export type MapViewport = {
+  bounds: string;
+  zoom: number;
+};

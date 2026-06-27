@@ -122,6 +122,7 @@ export const mapReportQuerySchema = z.object({
   state: z.string().trim().max(80).optional(),
   damageType: damageTypeFilterSchema,
   verifiedBySatellite: optionalBooleanFilterSchema,
+  since: z.string().datetime().optional(),
   north: z.coerce.number().min(-90).max(90).optional(),
   south: z.coerce.number().min(-90).max(90).optional(),
   east: z.coerce.number().min(-180).max(180).optional(),
@@ -237,4 +238,25 @@ export interface DamageZone {
   score: number;
   sourceName: string;
   acquiredAt: string | null;
+}
+
+export const imageryQuerySchema = z.object({
+  north: z.coerce.number().min(-90).max(90).optional(),
+  south: z.coerce.number().min(-90).max(90).optional(),
+  east: z.coerce.number().min(-180).max(180).optional(),
+  west: z.coerce.number().min(-180).max(180).optional(),
+  phase: z.enum(["pre", "post"]).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export interface ImageryScene {
+  sceneId: string;
+  provider: string;
+  phase: string | null;
+  datetime: string | null;
+  license: string | null;
+  /** [minLng, minLat, maxLng, maxLat] in EPSG:4326 */
+  bbox: [number, number, number, number];
+  r2Key: string;
+  resolutionM: number | null;
 }

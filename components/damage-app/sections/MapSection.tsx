@@ -1,6 +1,9 @@
 import { DamageMapWithZonesToggle } from "@/components/damage-app/map/DamageMapWithZonesToggle";
 import { ReportDialog } from "@/components/damage-app/reports/ReportDialog";
-import type { ReportCreatedHandler } from "@/components/damage-app/types";
+import type {
+  MapViewport,
+  ReportCreatedHandler,
+} from "@/components/damage-app/types";
 import {
   type MapItem,
 } from "@/lib/report-schema";
@@ -11,7 +14,7 @@ export function MapSection({
   affectedStates,
   visibleReportCount,
   zoneSources,
-  onBoundsChange,
+  onViewportChange,
   onZoneSourcesChange,
   onCreated,
 }: {
@@ -20,7 +23,7 @@ export function MapSection({
   affectedStates: number;
   visibleReportCount: number;
   zoneSources: string[];
-  onBoundsChange: (bounds: string) => void;
+  onViewportChange: (viewport: MapViewport) => void;
   onZoneSourcesChange: (sources: string[]) => void;
   onCreated: ReportCreatedHandler;
 }) {
@@ -30,7 +33,7 @@ export function MapSection({
         <DamageMapWithZonesToggle
           reports={reports}
           zoneSources={zoneSources}
-          onBoundsChange={onBoundsChange}
+          onViewportChange={onViewportChange}
           onZoneSourcesChange={onZoneSourcesChange}
         />
         {!loading && !reports.length ? (

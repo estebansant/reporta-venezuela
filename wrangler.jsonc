@@ -30,6 +30,10 @@
 			"binding": "REPORT_IMAGES",
 			"bucket_name": "terremoto-report-images-local",
 		},
+		{
+			"binding": "MAP_TILES",
+			"bucket_name": "terremoto-map-tiles-local",
+		},
 	],
 	"env": {
 		"preview": {
@@ -51,6 +55,10 @@
 					"binding": "REPORT_IMAGES",
 					"bucket_name": "terremoto-report-images-preview",
 				},
+				{
+					"binding": "MAP_TILES",
+					"bucket_name": "terremoto-map-tiles-preview",
+				},
 			],
 		},
 		"production": {
@@ -71,6 +79,10 @@
 				{
 					"binding": "REPORT_IMAGES",
 					"bucket_name": "terremoto-report-images",
+				},
+				{
+					"binding": "MAP_TILES",
+					"bucket_name": "terremoto-map-tiles",
 				},
 			],
 			"routes": [

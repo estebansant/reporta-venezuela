@@ -47,3 +47,5 @@ next-env.d.ts
 /EMSR884_products
 database.sql
 *.sql
+!migrations/*.sql
+satellites-research-report.md

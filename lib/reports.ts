@@ -65,7 +65,11 @@ export function rowsToReports(rows: ReportRow[]): PublicReport[] {
 export async function getReportById(db: D1Database, id: string) {
   const result = await db
     .prepare(
-      `SELECT r.*, i.id AS image_id, i.width AS image_width,
+      `SELECT r.id, r.building_name, r.address, r.state, r.city,
+        r.latitude, r.longitude, r.damage_type, r.needs_help,
+        r.description, r.contact_name, r.contact_phone, r.contact_email,
+        r.created_at, r.verified_by_satellite,
+        i.id AS image_id, i.width AS image_width,
         i.height AS image_height, i.position AS image_position
        FROM reports r
        LEFT JOIN report_images i ON i.report_id = r.id

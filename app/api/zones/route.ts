@@ -186,6 +186,14 @@ export async function GET(request: Request) {
 
   const { DB } = await getCloudflareEnv();
   const query = parsed.data;
+
+  if (url.searchParams.get("baseline") === "static") {
+    return Response.json(
+      { zones: [] },
+      { headers: jsonHeaders({ "Cache-Control": ZONES_CACHE_CONTROL }) },
+    );
+  }
+
   const filters: string[] = [];
   const bindings: number[] = [];
 

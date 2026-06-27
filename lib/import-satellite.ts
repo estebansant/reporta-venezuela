@@ -7,6 +7,7 @@ export const COPERNICUS_EMS_SOURCE: VerifiedSource = "copernicus-ems";
 export const ARIA_DPM_SOURCE = "aria-dpm";
 export const USGS_SHAKEMAP_SOURCE = "usgs-shakemap";
 export const GDACS_SOURCE = "gdacs";
+export const SENTINEL2_CHANGE_SOURCE = "sentinel2-change";
 
 export const AUTOTAG_RADIUS_M = 15;
 // ≈15 m of latitude in degrees. Longitude is padded by /cos(lat) at call sites.
@@ -633,6 +634,52 @@ export function rasterToDamageZones(args: {
   }
 
   return zones;
+}
+
+/**
+ * Convert a scored Sentinel-2 change-detection grid cell into a damage_zones record.
+ * Called by scripts/detect-change-sentinel2.ts for each cell that exceeds the min score.
+ */
+export function sentinel2ChangeToZone(args: {
+  preSceneId: string;
+  postSceneId: string;
+  rowPx: number;
+  colPx: number;
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+  score: number;
+  acquiredAt: string | null;
+}): DamageZoneRecord {
+  const { preSceneId, postSceneId, rowPx, colPx, minLat, maxLat, minLng, maxLng, score, acquiredAt } = args;
+  const clamped = Math.min(1, Math.max(0, score));
+  return {
+    id: `${SENTINEL2_CHANGE_SOURCE}:${preSceneId}:${postSceneId}:${rowPx}:${colPx}`,
+    geometry: JSON.stringify({
+      type: "Polygon",
+      coordinates: [
+        [
+          [minLng, minLat],
+          [maxLng, minLat],
+          [maxLng, maxLat],
+          [minLng, maxLat],
+          [minLng, minLat],
+        ],
+      ],
+    }),
+    minLat,
+    maxLat,
+    minLng,
+    maxLng,
+    centroidLat: (minLat + maxLat) / 2,
+    centroidLng: (minLng + maxLng) / 2,
+    damageCategory: categorizeZoneScore(clamped),
+    score: clamped,
+    sourceName: SENTINEL2_CHANGE_SOURCE,
+    sourceId: `${preSceneId}:${postSceneId}:${rowPx}:${colPx}`,
+    acquiredAt,
+  };
 }
 
 export function haversineMeters(
