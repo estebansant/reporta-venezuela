@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { clusterMapReports } from "./map-report-clusters";
+import {
+  buildMapReportClusterIndex,
+  clusterMapReports,
+  getMapReportClusters,
+} from "./map-report-clusters";
 import type { MapReport } from "./report-schema";
 
 function buildReport(
@@ -55,11 +59,34 @@ describe("clusterMapReports", () => {
         buildReport("b", 10.5002, -66.9002),
       ],
       bounds,
-      zoom: 18,
+      zoom: 16,
     });
 
     expect(result).toHaveLength(2);
     expect(result.every((item) => item.kind === "single")).toBe(true);
+  });
+
+  it("reuses a built cluster index across viewport zoom changes", () => {
+    const clusterIndex = buildMapReportClusterIndex([
+      buildReport("a", 10.5, -66.9),
+      buildReport("b", 10.5002, -66.9002),
+    ]);
+
+    const lowZoom = getMapReportClusters({
+      clusterIndex,
+      bounds,
+      zoom: 11,
+    });
+    const highZoom = getMapReportClusters({
+      clusterIndex,
+      bounds,
+      zoom: 16,
+    });
+
+    expect(lowZoom).toHaveLength(1);
+    expect(lowZoom[0]).toMatchObject({ kind: "group", reportCount: 2 });
+    expect(highZoom).toHaveLength(2);
+    expect(highZoom.every((item) => item.kind === "single")).toBe(true);
   });
 
   it("aggregates report count and worst severity", () => {
@@ -99,4 +126,3 @@ describe("clusterMapReports", () => {
     });
   });
 });
-

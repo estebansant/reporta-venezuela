@@ -238,92 +238,78 @@ interface HdxPackage {
   };
 }
 
-interface HdxSearch {
-  result: {
-    results: Array<{ id: string; title: string }>;
-  };
+const HDX_API = "https://data.humdata.org/api/3/action";
+
+// Microsoft AI for Good per-event damage datasets on HDX (one per AOI).
+// Add new AOIs here as Microsoft publishes them.
+const MSAIG_DATASETS = [
+  { slug: "venezuela-earthquakes-catia-la-mar", aoi: "catia-la-mar" },
+  { slug: "venezuela-earthquakes-building-damage-assessment-in-la-guaira", aoi: "la-guaira" },
+  { slug: "venezuela-earthquakes-building-damage-assessment-in-caraballeda", aoi: "caraballeda" },
+];
+
+type HdxResource = HdxPackage["result"]["resources"][number];
+
+// Building-damage footprints come as a vector resource (GeoPackage / GeoJSON /
+// zipped Shapefile). Score candidates so the actual footprints win over
+// auxiliary vectors like the AOI/valid-area mask.
+function pickVectorResource(resources: HdxResource[]): HdxResource | undefined {
+  return resources
+    .map((r) => {
+      const fmt = r.format.toUpperCase();
+      const url = r.url.toLowerCase();
+      const name = (r.name ?? "").toLowerCase();
+      const isVector =
+        fmt === "GEOPACKAGE" || fmt === "GPKG" || fmt === "GEOJSON" || fmt === "SHP" ||
+        url.endsWith(".gpkg") || url.endsWith(".geojson") ||
+        (url.endsWith(".zip") && /shp|shape|footprint|damage|building/.test(url));
+      if (!isVector) return null;
+      let score = 0;
+      if (/footprint|damage|building|prediction/.test(name)) score += 3;
+      if (fmt === "GEOPACKAGE" || fmt === "GPKG" || url.endsWith(".gpkg")) score += 2;
+      if (/mask|valid_area|aoi|extent/.test(name)) score -= 5; // auxiliary, not footprints
+      return { r, score };
+    })
+    .filter((x): x is { r: HdxResource; score: number } => x !== null)
+    .sort((a, b) => b.score - a.score)[0]?.r;
 }
 
 async function fetchMsaig(): Promise<string | null> {
-  progress("MS AI for Good / HDX: buscando dataset...");
+  progress("MS AI for Good / HDX: descargando datasets de daño por AOI...");
 
-  const HDX_API = "https://data.humdata.org/api/3/action";
+  const downloaded: string[] = [];
 
-  // Try known slug first, then fall back to search.
-  const knownSlugs = [
-    "microsoft-ai-for-good-disaster-response-catia-la-mar",
-    "microsoft-ai-for-good-venezuela-2026",
-  ];
-
-  let packageId: string | null = null;
-
-  for (const slug of knownSlugs) {
+  for (const { slug, aoi } of MSAIG_DATASETS) {
+    let pkg: HdxPackage;
     try {
-      const pkg = await fetchJson<HdxPackage>(
-        `${HDX_API}/package_show?id=${slug}`,
-      );
-      if (pkg.result?.id) {
-        packageId = pkg.result.id;
-        progress(`HDX: dataset encontrado: ${pkg.result.title}`);
-        break;
-      }
-    } catch {
-      // Not found with this slug; try search.
-    }
-  }
-
-  if (!packageId) {
-    progress("HDX: slug exacto no encontrado, buscando...");
-    try {
-      const search = await fetchJson<HdxSearch>(
-        `${HDX_API}/package_search?q=venezuela+earthquake+catia&rows=5`,
-      );
-      const hit = search.result.results.find(
-        (r) =>
-          r.title.toLowerCase().includes("venezuela") ||
-          r.title.toLowerCase().includes("catia"),
-      );
-      if (hit) {
-        packageId = hit.id;
-        progress(`HDX: dataset encontrado vía búsqueda: ${hit.title}`);
-      }
+      pkg = await fetchJson<HdxPackage>(`${HDX_API}/package_show?id=${slug}`);
     } catch (err) {
-      progress(`HDX búsqueda error: ${err instanceof Error ? err.message : err}`);
+      progress(`HDX: ${aoi} (${slug}) no disponible: ${err instanceof Error ? err.message : err}`);
+      continue;
     }
+    const vec = pickVectorResource(pkg.result.resources);
+    if (!vec) {
+      progress(`HDX: ${aoi} sin recurso vector de footprints.`);
+      continue;
+    }
+    const ext =
+      vec.url.toLowerCase().endsWith(".geojson") ? "geojson"
+      : vec.url.toLowerCase().endsWith(".zip") ? "zip"
+      : "gpkg";
+    const local = await download(vec.url, `msaig-damage-${aoi}.${ext}`);
+    downloaded.push(local);
+    progress(`HDX: ${aoi} ✓ (${pkg.result.title})`);
   }
 
-  if (!packageId) {
-    progress("HDX: dataset MS AI for Good no encontrado aún.");
+  if (!downloaded.length) {
+    progress("HDX: no se descargó ningún dataset de daño.");
     return null;
   }
 
-  let pkg: HdxPackage;
-  try {
-    pkg = await fetchJson<HdxPackage>(`${HDX_API}/package_show?id=${packageId}`);
-  } catch (err) {
-    progress(`HDX descarga de metadatos falló: ${err instanceof Error ? err.message : err}`);
-    return null;
-  }
-
-  const tifResource = pkg.result.resources.find(
-    (r) =>
-      r.format.toUpperCase() === "GEOTIFF" ||
-      r.url.endsWith(".tif") ||
-      r.url.endsWith(".tiff"),
-  );
-
-  if (!tifResource) {
-    progress("HDX: sin recurso GeoTIFF en el dataset.");
-    return null;
-  }
-
-  const filename = `msaig-${tifResource.id}.tif`;
-  const local = await download(tifResource.url, filename);
-  printImportCmd(local, "ms-ai-for-good", "post", tifResource.id, {
-    datetime: "2026-06-26T00:00:00Z",
-    license: "CC BY 4.0",
-  });
-  return local;
+  progress("");
+  progress("Footprints de daño descargados. Genera PMTiles coloreados (todos los AOIs en una capa) con:");
+  progress(`  pnpm extract:damage ${downloaded.map((f) => `--gpkg ${f}`).join(" ")}`);
+  return downloaded.join(" ");
 }
 
 // ---------------------------------------------------------------------------

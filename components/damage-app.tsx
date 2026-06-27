@@ -18,7 +18,10 @@ import {
   invalidateClientFetchCache,
   normalizeRequestKey,
 } from "@/lib/client-fetch-cache";
-import { clusterMapReports } from "@/lib/map-report-clusters";
+import {
+  buildMapReportClusterIndex,
+  getMapReportClusters,
+} from "@/lib/map-report-clusters";
 import { mapTilesPath, type MapTilesManifest } from "@/lib/map-tiles";
 import type {
   DamageType,
@@ -435,14 +438,19 @@ export function DamageApp() {
     [viewport.bounds],
   );
 
+  const mapReportClusterIndex = useMemo(
+    () => buildMapReportClusterIndex(rawMapReports),
+    [rawMapReports],
+  );
+
   const mapReports = useMemo(
     () =>
-      clusterMapReports({
-        reports: rawMapReports,
+      getMapReportClusters({
+        clusterIndex: mapReportClusterIndex,
         bounds: parsedViewportBounds,
         zoom: viewport.zoom,
       }),
-    [parsedViewportBounds, rawMapReports, viewport.zoom],
+    [mapReportClusterIndex, parsedViewportBounds, viewport.zoom],
   );
 
   const handlePageChange = useCallback((nextPage: number) => {

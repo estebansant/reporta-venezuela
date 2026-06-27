@@ -145,6 +145,7 @@ export const damageZoneSourceLabels: Record<string, string> = {
   "usgs-shakemap": "USGS ShakeMap",
   gdacs: "GDACS",
   "aria-dpm": "ARIA (NASA/JPL)",
+  "ms-ai-for-good": "Microsoft AI for Good",
 };
 
 export function damageZoneSourceLabel(sourceName: string): string {

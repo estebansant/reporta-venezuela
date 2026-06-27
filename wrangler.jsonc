@@ -20,19 +20,19 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "terremoto-reports-local",
-			"database_id": "local",
+			"database_name": "terremoto-reports",
+			"database_id": "589c8325-dda2-404c-b598-79456c8f3c67",
 			"migrations_dir": "migrations",
 		},
 	],
 	"r2_buckets": [
 		{
 			"binding": "REPORT_IMAGES",
-			"bucket_name": "terremoto-report-images-local",
+			"bucket_name": "terremoto-report-images",
 		},
 		{
 			"binding": "MAP_TILES",
-			"bucket_name": "terremoto-map-tiles-local",
+			"bucket_name": "terremoto-map-tiles",
 		},
 	],
 	"env": {
@@ -86,8 +86,14 @@
 				},
 			],
 			"routes": [
-				{ "pattern": "reportavenezuela.org/*", "zone_name": "reportavenezuela.org" },
-				{ "pattern": "www.reportavenezuela.org/*", "zone_name": "reportavenezuela.org" },
+				{
+					"pattern": "reportavenezuela.org/*",
+					"zone_name": "reportavenezuela.org"
+				},
+				{
+					"pattern": "www.reportavenezuela.org/*",
+					"zone_name": "reportavenezuela.org"
+				},
 			],
 		},
 	},

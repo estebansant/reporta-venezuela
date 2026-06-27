@@ -22,6 +22,7 @@ type ReportClusterProperties = {
   needsHelp: boolean;
   verifiedBySatellite: boolean;
   createdAt: string;
+  createdAtMs: number;
 };
 
 type ReportPoint = GeoJSON.Feature<
@@ -29,12 +30,20 @@ type ReportPoint = GeoJSON.Feature<
   ReportClusterProperties & { report: MapReport }
 >;
 
+export type MapReportClusterIndex = {
+  reports: MapReport[];
+  index: Supercluster<ReportClusterProperties, ReportClusterProperties> | null;
+};
+
 const damageSeverityRank: Record<DamageType, number> = {
   cracks: 0,
   moderate: 1,
   severe: 2,
   collapse: 3,
 };
+
+const CLUSTER_RADIUS_PX = 64;
+const CLUSTER_MAX_ZOOM = 15;
 
 function toSingleReport(report: MapReport): MapSingleReport {
   return {
@@ -62,6 +71,7 @@ function pointFromReport(report: MapReport): ReportPoint {
       needsHelp: report.needsHelp,
       verifiedBySatellite: report.verifiedBySatellite,
       createdAt: report.createdAt,
+      createdAtMs: new Date(report.createdAt).getTime(),
     },
   };
 }
@@ -78,8 +88,9 @@ function mapClusterProperties(
   accumulated.needsHelp = accumulated.needsHelp || props.needsHelp;
   accumulated.verifiedBySatellite =
     accumulated.verifiedBySatellite || props.verifiedBySatellite;
-  if (new Date(props.createdAt).getTime() > new Date(accumulated.createdAt).getTime()) {
+  if (props.createdAtMs > accumulated.createdAtMs) {
     accumulated.createdAt = props.createdAt;
+    accumulated.createdAtMs = props.createdAtMs;
   }
 }
 
@@ -129,23 +140,16 @@ function buildGroup(
   };
 }
 
-export function clusterMapReports({
-  reports,
-  bounds,
-  zoom,
-}: {
-  reports: MapReport[];
-  bounds: ClusterBounds | null;
-  zoom: number;
-}): MapItem[] {
-  if (reports.length < 2) return reports.map(toSingleReport);
-
+export function buildMapReportClusterIndex(
+  reports: MapReport[],
+): MapReportClusterIndex {
+  if (reports.length < 2) return { reports, index: null };
   const index = new Supercluster<
     ReportClusterProperties,
     ReportClusterProperties
   >({
-    radius: 52,
-    maxZoom: 16,
+    radius: CLUSTER_RADIUS_PX,
+    maxZoom: CLUSTER_MAX_ZOOM,
     minPoints: 2,
     map: (props) => ({
       reportCount: props.reportCount,
@@ -153,11 +157,25 @@ export function clusterMapReports({
       needsHelp: props.needsHelp,
       verifiedBySatellite: props.verifiedBySatellite,
       createdAt: props.createdAt,
+      createdAtMs: props.createdAtMs,
     }),
     reduce: reduceClusterProperties,
   });
   index.load(reports.map(pointFromReport));
+  return { reports, index };
+}
 
+export function getMapReportClusters({
+  clusterIndex,
+  bounds,
+  zoom,
+}: {
+  clusterIndex: MapReportClusterIndex;
+  bounds: ClusterBounds | null;
+  zoom: number;
+}): MapItem[] {
+  const index = clusterIndex.index;
+  if (!index) return clusterIndex.reports.map(toSingleReport);
   const bbox: [number, number, number, number] = bounds
     ? [bounds.west, bounds.south, bounds.east, bounds.north]
     : [-180, -90, 180, 90];
@@ -184,6 +202,7 @@ export function clusterMapReports({
           needsHelp: props.needsHelp,
           verifiedBySatellite: props.verifiedBySatellite,
           createdAt: props.createdAt,
+          createdAtMs: props.createdAtMs,
         },
         leaves,
       );
@@ -192,4 +211,20 @@ export function clusterMapReports({
       (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
+}
+
+export function clusterMapReports({
+  reports,
+  bounds,
+  zoom,
+}: {
+  reports: MapReport[];
+  bounds: ClusterBounds | null;
+  zoom: number;
+}): MapItem[] {
+  return getMapReportClusters({
+    clusterIndex: buildMapReportClusterIndex(reports),
+    bounds,
+    zoom,
+  });
 }

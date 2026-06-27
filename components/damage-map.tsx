@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   MapContainer,
   Marker,
@@ -15,6 +15,7 @@ import { BuildingsLayer } from "@/components/damage-app/map/BuildingsLayer";
 import { CogOverlay } from "@/components/damage-app/map/CogOverlay";
 import type { MapViewport } from "@/components/damage-app/types";
 
+import { cachedJson, normalizeRequestKey } from "@/lib/client-fetch-cache";
 import { mapTilesPath, type MapTilesManifest } from "@/lib/map-tiles";
 import type {
   DamageType,
@@ -47,6 +48,10 @@ const zoneColors: Record<DamageZoneCategory, string> = {
 };
 
 const BOUNDS_PRECISION = 4;
+// Debounce moveend-driven zone fetches and cache by normalized bbox so rapid
+// panning doesn't hammer /api/zones (matches the reports map cadence).
+const ZONES_DEBOUNCE_MS = 250;
+const ZONES_CACHE_TTL_MS = 45_000;
 
 function boundsToSearchParams(
   bounds: L.LatLngBounds,
@@ -134,6 +139,14 @@ function createReportPopup(report: MapItem) {
 
 function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
   const map = useMap();
+  const popupRef = useRef<L.Popup | null>(null);
+
+  useEffect(() => {
+    return () => {
+      popupRef.current?.remove();
+      popupRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!reports.length) return;
@@ -146,7 +159,6 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
     const pane = map.getPanes().overlayPane;
     const projected: ProjectedReport[] = [];
     let animationFrame = 0;
-    let popup: L.Popup | null = null;
 
     if (!context) return;
 
@@ -297,8 +309,8 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
       if (!report) return;
 
       L.DomEvent.stop(mouseEvent);
-      popup?.remove();
-      popup = L.popup()
+      popupRef.current?.remove();
+      popupRef.current = L.popup({ closeOnClick: false })
         .setLatLng([report.latitude, report.longitude])
         .setContent(createReportPopup(report))
         .openOn(map);
@@ -320,7 +332,6 @@ function DamageReportsCanvasLayer({ reports }: { reports: MapItem[] }) {
       map.off("move zoom resize", scheduleRedraw);
       L.DomEvent.off(canvas, "click", handleClick);
       L.DomEvent.off(canvas, "mousemove", handlePointerMove);
-      popup?.remove();
       canvas.remove();
     };
   }, [map, reports]);
@@ -546,9 +557,15 @@ function DamageZonesLayer({
             .sort((a, b) => b.score - a.score)
             .slice(0, 500);
         } else {
-          const response = await fetch(`/api/zones?${params}`);
-          if (!response.ok || aborted) return;
-          const data = (await response.json()) as { zones: DamageZone[] };
+          const data = await cachedJson<{ zones: DamageZone[] }>(
+            normalizeRequestKey("/api/zones", params),
+            ZONES_CACHE_TTL_MS,
+            () =>
+              fetch(`/api/zones?${params}`).then((r) =>
+                r.ok ? r.json() : { zones: [] },
+              ),
+          );
+          if (aborted) return;
           zones = data.zones;
         }
         if (aborted) return;
@@ -690,12 +707,19 @@ function DamageZonesLayer({
       }
     }
 
+    let debounceTimer: number | undefined;
+    function scheduleLoad() {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => void load(), ZONES_DEBOUNCE_MS);
+    }
+
     void load();
-    map.on("moveend", load);
+    map.on("moveend", scheduleLoad);
 
     return () => {
       aborted = true;
-      map.off("moveend", load);
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      map.off("moveend", scheduleLoad);
       layer.remove();
     };
   }, [map, onZoneSourcesChange]);
@@ -763,7 +787,7 @@ export function DamageMap({
   onViewportChange,
   onZoneSourcesChange,
   showDamageZones = true,
-  showBuildings = false,
+  showDamageBuildings = false,
   cogUrl,
   cogOpacity = 0.8,
 }: {
@@ -774,7 +798,7 @@ export function DamageMap({
   onViewportChange?: (viewport: MapViewport) => void;
   onZoneSourcesChange?: (sources: string[]) => void;
   showDamageZones?: boolean;
-  showBuildings?: boolean;
+  showDamageBuildings?: boolean;
   cogUrl?: string;
   cogOpacity?: number;
 }) {
@@ -796,7 +820,9 @@ export function DamageMap({
         onViewportChange={onViewportChange}
       />
       <FlyToSelection position={selectedPosition} />
-      {showBuildings ? <BuildingsLayer url="/tiles/buildings.pmtiles" /> : null}
+      {showDamageBuildings ? (
+        <BuildingsLayer url="/tiles/buildings-damage.pmtiles" colorByDamage />
+      ) : null}
       {cogUrl ? <CogOverlay url={cogUrl} opacity={cogOpacity} /> : null}
       {showDamageZones ? (
         <DamageZonesLayer onZoneSourcesChange={onZoneSourcesChange} />

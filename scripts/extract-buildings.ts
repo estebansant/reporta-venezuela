@@ -128,29 +128,49 @@ async function fetchBuildings(bbox: [number, number, number, number]): Promise<O
   }
 }
 
-function parseArgs(): { aoi: string; env: ImportEnv } {
+type CliArgs =
+  | { mode: "osm"; aoi: string; env: ImportEnv }
+  | { mode: "msdamage"; gpkgs: string[]; env: ImportEnv };
+
+function parseArgs(): CliArgs {
   const argv = process.argv.slice(2);
   let aoiName: string | undefined;
+  let source = "osm";
+  const gpkgs: string[] = [];
   let env: ImportEnv = "local";
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--aoi" && argv[i + 1]) {
       aoiName = argv[++i];
     } else if (argv[i]?.startsWith("--aoi=")) {
       aoiName = argv[i].slice("--aoi=".length);
+    } else if (argv[i] === "--source" && argv[i + 1]) {
+      source = argv[++i];
+    } else if (argv[i]?.startsWith("--source=")) {
+      source = argv[i].slice("--source=".length);
+    } else if (argv[i] === "--gpkg" && argv[i + 1]) {
+      gpkgs.push(argv[++i]);
+    } else if (argv[i]?.startsWith("--gpkg=")) {
+      gpkgs.push(argv[i].slice("--gpkg=".length));
     } else if (argv[i] === "--env" && argv[i + 1]) {
       env = argv[++i] as ImportEnv;
     } else if (argv[i]?.startsWith("--env=")) {
       env = argv[i].slice("--env=".length) as ImportEnv;
     }
   }
+  if (!["local", "preview", "production"].includes(env)) {
+    throw new Error("--env debe ser local, preview o production.");
+  }
+  if (source === "msdamage") {
+    if (!gpkgs.length) {
+      throw new Error("--source msdamage requiere al menos un --gpkg <ruta al .gpkg/.geojson>.");
+    }
+    return { mode: "msdamage", gpkgs, env };
+  }
   if (!aoiName || !AOIS[aoiName]) {
     const keys = Object.keys(AOIS).join(", ");
     throw new Error(`--aoi requerido. Opciones: ${keys}`);
   }
-  if (!["local", "preview", "production"].includes(env)) {
-    throw new Error("--env debe ser local, preview o production.");
-  }
-  return { aoi: aoiName, env };
+  return { mode: "osm", aoi: aoiName, env };
 }
 
 async function getMapTilesBucket(env: ImportEnv): Promise<{ bucketName: string; r2Args: string[] }> {
@@ -170,7 +190,8 @@ async function getMapTilesBucket(env: ImportEnv): Promise<{ bucketName: string; 
   return { bucketName, r2Args };
 }
 
-async function runTippecanoe(input: string, output: string) {
+async function runTippecanoe(input: string | string[], output: string) {
+  const inputs = Array.isArray(input) ? input : [input];
   await execFileAsync(
     "tippecanoe",
     [
@@ -180,7 +201,7 @@ async function runTippecanoe(input: string, output: string) {
       "--maximum-zoom=18",
       "--drop-densest-as-needed",
       "--layer=buildings",
-      input,
+      ...inputs,
     ],
     { maxBuffer: 100 * 1024 * 1024 },
   );
@@ -207,8 +228,92 @@ async function putR2(
   await runWrangler(args);
 }
 
-async function main() {
-  const { aoi, env } = parseArgs();
+// ---------------------------------------------------------------------------
+// Microsoft AI for Good — per-building damage footprints (GeoPackage)
+// ---------------------------------------------------------------------------
+
+interface OgrLayerInfo {
+  name: string;
+  geomCol: string;
+  fields: string[];
+}
+
+async function inspectGpkg(gpkgPath: string): Promise<OgrLayerInfo> {
+  const { stdout } = await execFileAsync(
+    "ogrinfo",
+    ["-so", "-json", gpkgPath],
+    { maxBuffer: 50 * 1024 * 1024 },
+  );
+  const info = JSON.parse(stdout) as {
+    layers: Array<{
+      name: string;
+      geometryFields?: Array<{ name: string }>;
+      fields?: Array<{ name: string }>;
+    }>;
+  };
+  const layer = info.layers?.[0];
+  if (!layer) throw new Error("El gpkg no contiene capas.");
+  return {
+    name: layer.name,
+    geomCol: layer.geometryFields?.[0]?.name ?? "geom",
+    fields: (layer.fields ?? []).map((f) => f.name),
+  };
+}
+
+// Reproject to EPSG:4326 and classify each footprint by its damage ratio,
+// emitting a GeoJSON with `damage_class` (none|minimal|low|moderate|high|severe)
+// that BuildingsLayer colors. Handles 0-1 and 0-100 damage scales. One GeoJSON
+// per AOI; tippecanoe merges them into a single layer.
+async function extractMsDamage(
+  gpkgPath: string,
+  outGeojson: string,
+  aoi: string,
+) {
+  const layer = await inspectGpkg(gpkgPath);
+  const damageField =
+    ["damage_pct_0m", "damage_pct", "damage_ratio", "damage"].find((f) =>
+      layer.fields.includes(f),
+    ) ?? null;
+  if (!damageField) {
+    throw new Error(
+      `No se encontró campo de daño en el gpkg. Campos: ${layer.fields.join(", ")}`,
+    );
+  }
+  const idField = ["id", "fid", "building_id"].find((f) => layer.fields.includes(f));
+  progress(`  Capa "${layer.name}", campo de daño "${damageField}"`);
+
+  // Normalize to 0-1 so thresholds work whether the source is a ratio or percent.
+  const ratio = `(CASE WHEN "${damageField}" > 1.0 THEN "${damageField}" / 100.0 ELSE "${damageField}" END)`;
+  const damageClass =
+    `CASE` +
+    ` WHEN ${ratio} >= 0.8 THEN 'severe'` +
+    ` WHEN ${ratio} >= 0.6 THEN 'high'` +
+    ` WHEN ${ratio} >= 0.4 THEN 'moderate'` +
+    ` WHEN ${ratio} >= 0.2 THEN 'low'` +
+    ` WHEN ${ratio} > 0 THEN 'minimal'` +
+    ` ELSE 'none' END`;
+  // Namespace building_id by AOI so ids stay unique across merged datasets.
+  const idSelect = idField ? `'${aoi}:' || "${idField}" AS building_id, ` : "";
+  const sql =
+    `SELECT "${layer.geomCol}", ${idSelect}'${aoi}' AS aoi, ${ratio} AS damage_pct, ` +
+    `${damageClass} AS damage_class, 'ms-ai-for-good' AS source ` +
+    `FROM "${layer.name}"`;
+
+  await execFileAsync(
+    "ogr2ogr",
+    [
+      "-f", "GeoJSON",
+      "-t_srs", "EPSG:4326",
+      "-dialect", "SQLite",
+      "-sql", sql,
+      outGeojson,
+      gpkgPath,
+    ],
+    { maxBuffer: 500 * 1024 * 1024 },
+  );
+}
+
+async function runOsm(aoi: string, env: ImportEnv) {
   const config = AOIS[aoi]!;
   progress(`AOI: ${config.label} (${aoi}), env: ${env}`);
 
@@ -234,6 +339,51 @@ async function main() {
     progress("Listo. Huellas disponibles en /tiles/buildings.pmtiles");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// Derive an AOI tag from a gpkg path (e.g. msaig-damage-la-guaira.gpkg → la-guaira).
+function aoiFromPath(gpkgPath: string): string {
+  const base = path.basename(gpkgPath).replace(/\.[^.]+$/, "");
+  return base.replace(/^msaig-damage-/, "") || base;
+}
+
+async function runMsDamage(gpkgs: string[], env: ImportEnv) {
+  progress(`Footprints de daño MS (${gpkgs.length} AOI): env: ${env}`);
+
+  const { bucketName, r2Args } = await getMapTilesBucket(env);
+  const dir = await mkdtemp(path.join(tmpdir(), "terremoto-damage-"));
+
+  try {
+    const pmtilesPath = path.join(dir, "buildings-damage.pmtiles");
+    const geojsonPaths: string[] = [];
+
+    progress("Reproyectando + clasificando daño con ogr2ogr…");
+    for (let i = 0; i < gpkgs.length; i++) {
+      const gpkg = gpkgs[i]!;
+      const aoi = aoiFromPath(gpkg);
+      progress(`[${i + 1}/${gpkgs.length}] ${aoi} (${gpkg})`);
+      const out = path.join(dir, `damage-${aoi}.geojson`);
+      await extractMsDamage(gpkg, out, aoi);
+      geojsonPaths.push(out);
+    }
+
+    progress("Generando PMTiles con tippecanoe…");
+    await runTippecanoe(geojsonPaths, pmtilesPath);
+
+    await putR2(bucketName, r2Args, env, "tiles/buildings-damage.pmtiles", pmtilesPath);
+    progress("Listo. Daño por edificio en /tiles/buildings-damage.pmtiles");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function main() {
+  const args = parseArgs();
+  if (args.mode === "msdamage") {
+    await runMsDamage(args.gpkgs, args.env);
+  } else {
+    await runOsm(args.aoi, args.env);
   }
 }
 

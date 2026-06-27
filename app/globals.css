@@ -359,6 +359,18 @@ a {
   border-radius: 3px !important;
   outline-color: var(--zone-color) !important;
 }
+/* Per-building damage swatch: solid color so the legend matches the building
+   fills drawn on the map (BuildingsLayer renders DAMAGE_COLORS, not a tint). */
+.building-damage-swatch {
+  background: var(--zone-color);
+  border-color: color-mix(
+    in srgb,
+    var(--cream-paper) 75%,
+    transparent
+  ) !important;
+  border-radius: 3px !important;
+  outline-color: var(--zone-color) !important;
+}
 .map-empty {
   position: absolute;
   top: 50%;
