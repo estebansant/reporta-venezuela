@@ -1,64 +1,9 @@
-import { DamageMapClient } from "@/components/damage-app/map/DamageMapClient";
+import { DamageMapWithZonesToggle } from "@/components/damage-app/map/DamageMapWithZonesToggle";
 import { ReportDialog } from "@/components/damage-app/reports/ReportDialog";
 import type { ReportCreatedHandler } from "@/components/damage-app/types";
-import type { CSSProperties } from "react";
 import {
-  damageZoneSourceLabel,
-  type DamageZoneCategory,
   type MapItem,
 } from "@/lib/report-schema";
-
-const damageZoneLegendItems: {
-  category: DamageZoneCategory;
-  label: string;
-  color: string;
-}[] = [
-  { category: "low", label: "Daño bajo", color: "#8a6a24" },
-  { category: "moderate", label: "Daño moderado", color: "#b45309" },
-  { category: "high", label: "Daño alto", color: "#b53a24" },
-  { category: "severe", label: "Daño severo", color: "#7f1d1d" },
-];
-
-function DamageZonesLegend({ sources }: { sources: string[] }) {
-  // Attribute whichever authoritative sources actually contribute zones in view,
-  // de-duplicated by label (e.g. both copernicus-ems* map to "Copernicus EMS").
-  const sourceLabels = Array.from(new Set(sources.map(damageZoneSourceLabel)));
-
-  return (
-    <div
-      className="map-legend damage-zone-legend"
-      aria-label="Leyenda de zonas de daño"
-    >
-      <p>Zonas de daño</p>
-      {damageZoneLegendItems.map((item) => (
-        <div key={item.category}>
-          <span
-            className="damage-zone-swatch"
-            style={{ "--zone-color": item.color } as CSSProperties}
-            aria-hidden="true"
-          />
-          {item.label}
-        </div>
-      ))}
-      <p
-        style={{
-          marginTop: "0.65rem",
-          marginBottom: 0,
-          color: "var(--muted-foreground)",
-          fontSize: "12px",
-        }}
-      >
-        {sourceLabels.length ? (
-          <>
-            <strong>Fuentes:</strong> {sourceLabels.join(" · ")}
-          </>
-        ) : (
-          "Sin zonas en esta vista"
-        )}
-      </p>
-    </div>
-  );
-}
 
 export function MapSection({
   reports,
@@ -82,12 +27,12 @@ export function MapSection({
   return (
     <section className="map-layout" id="mapa">
       <div className="map-shell">
-        <DamageMapClient
+        <DamageMapWithZonesToggle
           reports={reports}
+          zoneSources={zoneSources}
           onBoundsChange={onBoundsChange}
           onZoneSourcesChange={onZoneSourcesChange}
         />
-        <DamageZonesLegend sources={zoneSources} />
         {!loading && !reports.length ? (
           <div className="map-empty">
             <strong>Aún no hay reportes en esta zona</strong>

@@ -261,6 +261,28 @@ a {
   padding: 0.9rem 1rem;
   pointer-events: none;
 }
+.map-overlay-controls {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  width: auto;
+  pointer-events: none;
+}
+.map-overlay-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+  width: max-content;
+  pointer-events: auto;
+}
+.map-zones-toggle-button {
+  width: 154px;
+  justify-content: center;
+}
 .map-legend p {
   margin: 0 0 0.65rem;
 }
@@ -280,6 +302,12 @@ a {
 }
 .damage-zone-legend {
   color: var(--ink);
+  position: static;
+  top: auto;
+  right: auto;
+  min-width: 205px;
+  width: 205px;
+  pointer-events: auto;
 }
 .damage-zone-swatch {
   background: color-mix(in srgb, var(--zone-color) 45%, transparent);

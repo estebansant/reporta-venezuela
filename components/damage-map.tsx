@@ -655,6 +655,7 @@ export function DamageMap({
   onSelect,
   onBoundsChange,
   onZoneSourcesChange,
+  showDamageZones = true,
 }: {
   reports?: MapItem[];
   selecting?: boolean;
@@ -662,6 +663,7 @@ export function DamageMap({
   onSelect?: (latitude: number, longitude: number) => void;
   onBoundsChange?: (bounds: string) => void;
   onZoneSourcesChange?: (sources: string[]) => void;
+  showDamageZones?: boolean;
 }) {
   return (
     <MapContainer
@@ -681,7 +683,9 @@ export function DamageMap({
         onBoundsChange={onBoundsChange}
       />
       <FlyToSelection position={selectedPosition} />
-      <DamageZonesLayer onZoneSourcesChange={onZoneSourcesChange} />
+      {showDamageZones ? (
+        <DamageZonesLayer onZoneSourcesChange={onZoneSourcesChange} />
+      ) : null}
       <DamageReportsCanvasLayer reports={reports} />
       {selectedPosition ? (
         <Marker
