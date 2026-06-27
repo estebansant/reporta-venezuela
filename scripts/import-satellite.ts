@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -10,11 +10,15 @@ import {
   AUTOTAG_BBOX_DEG,
   AUTOTAG_RADIUS_M,
   emsAreaFeatureToZone,
+  gdacsFeatureToZone,
   haversineMeters,
   normalizeEmsFeature,
+  normalizeEmsCandidateFeature,
   rasterToDamageZones,
+  shakemapFeatureToZone,
   type DamageZoneRecord,
   type GeoJSONFeature,
+  type NormalizedSatelliteCandidate,
   type NormalizedSatelliteReport,
 } from "../lib/import-satellite";
 import {
@@ -31,10 +35,20 @@ import {
   type WranglerTarget,
 } from "./import-wrangler";
 
-type Tier = "ems" | "ems-zones" | "maxar" | "sar";
+type Tier =
+  | "ems"
+  | "ems-local"
+  | "ems-zones"
+  | "zones-local"
+  | "candidates"
+  | "maxar"
+  | "sar"
+  | "usgs"
+  | "gdacs";
 
 const CHIP_HALF_PX = 64;
 const MAX_WEBP_BYTES = 20 * 1024 * 1024;
+const DEFAULT_EXCLUDED_LOCAL_AOIS = new Set(["08"]);
 
 interface CliOptions {
   tier: Tier;
@@ -47,7 +61,14 @@ interface CliOptions {
   emsUrl?: string;
   zonesUrl?: string;
   dpmUrl?: string;
+  gdacsUrl?: string;
+  localProducts?: string;
+  usgsUrl?: string;
+  eventId?: string;
+  preDate?: string;
+  postDates: string[];
   maxarCog?: string;
+  autoScoreThreshold: number;
   limit?: number;
 }
 
@@ -71,6 +92,8 @@ function parseArgs(argv: string[]): CliOptions {
     dryRun: true,
     write: false,
     confirmProduction: false,
+    postDates: ["2026-06-26", "2026-06-25"],
+    autoScoreThreshold: 0.85,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -84,7 +107,9 @@ function parseArgs(argv: string[]): CliOptions {
       return value;
     };
 
-    if (arg === "--dry-run") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--dry-run") {
       options.dryRun = true;
       options.write = false;
     } else if (arg === "--write") {
@@ -92,8 +117,22 @@ function parseArgs(argv: string[]): CliOptions {
       options.dryRun = false;
     } else if (arg === "--tier") {
       const tier = next();
-      if (!["ems", "ems-zones", "maxar", "sar"].includes(tier)) {
-        throw new Error("--tier debe ser ems, ems-zones, maxar o sar.");
+      if (
+        ![
+          "ems",
+          "ems-local",
+          "ems-zones",
+          "zones-local",
+          "candidates",
+          "maxar",
+          "sar",
+          "usgs",
+          "gdacs",
+        ].includes(tier)
+      ) {
+        throw new Error(
+          "--tier debe ser ems, ems-local, ems-zones, zones-local, candidates, maxar, sar, usgs o gdacs.",
+        );
       }
       options.tier = tier as Tier;
     } else if (arg === "--zones-url") {
@@ -110,6 +149,27 @@ function parseArgs(argv: string[]): CliOptions {
       options.emsUrl = next();
     } else if (arg === "--dpm-url") {
       options.dpmUrl = next();
+    } else if (arg === "--gdacs-url") {
+      options.gdacsUrl = next();
+    } else if (arg === "--local-products") {
+      options.localProducts = next();
+    } else if (arg === "--usgs-url") {
+      options.usgsUrl = next();
+    } else if (arg === "--event-id") {
+      options.eventId = next();
+    } else if (arg === "--pre-date") {
+      options.preDate = next();
+    } else if (arg === "--post-date") {
+      options.postDates = next()
+        .split(",")
+        .map((date) => date.trim())
+        .filter(Boolean);
+    } else if (arg === "--auto-score-threshold") {
+      const threshold = Number(next());
+      if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        throw new Error("--auto-score-threshold debe estar entre 0 y 1.");
+      }
+      options.autoScoreThreshold = threshold;
     } else if (arg === "--maxar-cog") {
       options.maxarCog = next();
     } else if (arg === "--bbox") {
@@ -154,6 +214,46 @@ async function loadFeatures(src: string): Promise<GeoJSONFeature[]> {
   }
   const data = JSON.parse(text) as { features?: GeoJSONFeature[] };
   return data.features ?? [];
+}
+
+async function findFiles(root: string, suffix: string) {
+  const found: string[] = [];
+  async function walk(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(fullPath);
+      else if (entry.isFile() && entry.name.endsWith(suffix)) found.push(fullPath);
+    }
+  }
+  await walk(root);
+  return found.sort();
+}
+
+async function loadLocalProductFeatures(
+  root: string,
+  suffix: string,
+  summary?: Summary,
+): Promise<{ file: string; features: GeoJSONFeature[] }[]> {
+  const files = await findFiles(root, suffix);
+  const products = [];
+  for (const file of files) {
+    const aoi = file.match(/_AOI([0-9]+)_/i)?.[1];
+    if (aoi && DEFAULT_EXCLUDED_LOCAL_AOIS.has(aoi)) {
+      summary?.warnings.push(`Ignorando producto local AOI${aoi}: ${file}`);
+      continue;
+    }
+    products.push({ file, features: await loadFeatures(file) });
+  }
+  return products;
+}
+
+function activationFromLocalFile(file: string, fallback: string) {
+  const name = path.basename(file);
+  const aoiMatch = name.match(/^(EMSR[0-9]+)_AOI([0-9]+)/i);
+  if (aoiMatch) return `${aoiMatch[1]}-AOI${aoiMatch[2]}`;
+  const match = name.match(/^(EMSR[0-9]+)_/i);
+  return match?.[1] ?? fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +313,26 @@ function autoTagSql(reportId: string, report: NormalizedSatelliteReport, now: st
     WHERE id = ${sqlString(reportId)};`;
 }
 
+function candidateUpsertSql(candidate: NormalizedSatelliteCandidate, now: string) {
+  const id = randomUUID();
+  return `INSERT INTO satellite_candidates (
+      id, latitude, longitude, suggested_damage_type, score,
+      source_name, source_id, state, city, note, status, created_at
+    ) VALUES (
+      ${sqlString(id)}, ${sqlNumber(candidate.latitude)}, ${sqlNumber(candidate.longitude)},
+      ${sqlString(candidate.suggestedDamageType)}, ${
+        candidate.score === null ? "NULL" : sqlNumber(candidate.score)
+      }, ${sqlString(candidate.sourceName)}, ${sqlString(candidate.sourceId)},
+      ${sqlString(candidate.state)}, ${sqlString(candidate.city)}, ${sqlString(candidate.note)},
+      'pending', ${sqlString(now)}
+    )
+    ON CONFLICT(source_name, source_id) DO UPDATE SET
+      latitude = excluded.latitude, longitude = excluded.longitude,
+      suggested_damage_type = excluded.suggested_damage_type,
+      score = excluded.score, state = excluded.state, city = excluded.city,
+      note = excluded.note;`;
+}
+
 async function runEmsTier(
   target: WranglerTarget,
   options: CliOptions,
@@ -233,9 +353,10 @@ async function runEmsTier(
   const now = new Date().toISOString();
   let processed = 0;
 
-  for (const feature of features) {
+  for (let fi = 0; fi < features.length; fi += 1) {
+    const feature = features[fi];
     if (options.limit && processed >= options.limit) break;
-    const normalized = normalizeEmsFeature(feature, activationId);
+    const normalized = normalizeEmsFeature(feature, activationId, fi);
     if ("skipped" in normalized) {
       summary.skipped += 1;
       continue;
@@ -263,6 +384,109 @@ async function runEmsTier(
 
   if (options.dryRun) {
     progress(`EMS (dry-run): ${statements.length} sentencias preparadas.`);
+    return;
+  }
+  if (statements.length) await d1ExecFile(target, statements.join("\n"));
+}
+
+async function runEmsLocalTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const root = options.localProducts ?? "EMSR884_products";
+  const products = await loadLocalProductFeatures(root, "builtUpA_v1.json", summary);
+  const statements: string[] = [];
+  const now = new Date().toISOString();
+  let processed = 0;
+  const seenReports = new Set<string>();
+  const seenCandidates = new Set<string>();
+
+  for (const product of products) {
+    const activationId = options.event ?? activationFromLocalFile(product.file, "EMS");
+    summary.fetched += product.features.length;
+    for (let fi = 0; fi < product.features.length; fi += 1) {
+      if (options.limit && processed >= options.limit) break;
+      const feature = product.features[fi];
+      processed += 1;
+
+      const normalized = normalizeEmsFeature(feature, activationId, fi);
+      if (!("skipped" in normalized)) {
+        if (seenReports.has(normalized.sourceId)) {
+          summary.skipped += 1;
+          continue;
+        }
+        seenReports.add(normalized.sourceId);
+        if (options.dryRun || !(await emsReportExists(target, normalized.sourceId))) {
+          statements.push(insertReportSql(normalized, now));
+          summary.created += 1;
+        } else {
+          summary.skipped += 1;
+        }
+        continue;
+      }
+
+      const candidate = normalizeEmsCandidateFeature(feature, activationId, fi);
+      if ("skipped" in candidate) {
+        summary.skipped += 1;
+        continue;
+      }
+      const candidateKey = `${candidate.sourceName}:${candidate.sourceId}`;
+      if (seenCandidates.has(candidateKey)) {
+        summary.skipped += 1;
+        continue;
+      }
+      seenCandidates.add(candidateKey);
+      statements.push(candidateUpsertSql(candidate, now));
+      summary.autoTagged += 1;
+    }
+  }
+
+  if (options.dryRun) {
+    progress(
+      `EMS local (dry-run): ${summary.created} reportes y ${summary.autoTagged} candidatos preparados.`,
+    );
+    return;
+  }
+  if (statements.length) await d1ExecFile(target, statements.join("\n"));
+}
+
+async function runCandidatesTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const root = options.localProducts ?? "EMSR884_products";
+  const products = await loadLocalProductFeatures(root, "builtUpA_v1.json", summary);
+  const statements: string[] = [];
+  const now = new Date().toISOString();
+  let processed = 0;
+  const seenCandidates = new Set<string>();
+
+  for (const product of products) {
+    const activationId = options.event ?? activationFromLocalFile(product.file, "EMS");
+    summary.fetched += product.features.length;
+    for (let fi = 0; fi < product.features.length; fi += 1) {
+      if (options.limit && processed >= options.limit) break;
+      processed += 1;
+      const candidate = normalizeEmsCandidateFeature(product.features[fi], activationId, fi);
+      if ("skipped" in candidate) {
+        summary.skipped += 1;
+        continue;
+      }
+      const candidateKey = `${candidate.sourceName}:${candidate.sourceId}`;
+      if (seenCandidates.has(candidateKey)) {
+        summary.skipped += 1;
+        continue;
+      }
+      seenCandidates.add(candidateKey);
+      statements.push(candidateUpsertSql(candidate, now));
+      summary.autoTagged += 1;
+    }
+  }
+
+  if (options.dryRun) {
+    progress(`Candidatos (dry-run): ${summary.autoTagged} candidatos preparados.`);
     return;
   }
   if (statements.length) await d1ExecFile(target, statements.join("\n"));
@@ -356,8 +580,8 @@ async function runEmsZonesTier(
   summary.fetched = features.length;
 
   const zones: DamageZoneRecord[] = [];
-  for (const feature of features) {
-    const zone = emsAreaFeatureToZone(feature, activationId);
+  for (let index = 0; index < features.length; index += 1) {
+    const zone = emsAreaFeatureToZone(features[index], activationId, index);
     if (zone) zones.push(zone);
     else summary.skipped += 1;
   }
@@ -365,6 +589,165 @@ async function runEmsZonesTier(
 
   if (options.dryRun) {
     progress(`EMS zones (dry-run): ${zones.length} áreas preparadas.`);
+    return;
+  }
+  const now = new Date().toISOString();
+  const statements = zones.map((zone) => zoneUpsertSql(zone, now));
+  if (statements.length) await d1ExecFile(target, statements.join("\n"));
+}
+
+async function runZonesLocalTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const root = options.localProducts ?? "EMSR884_products";
+  const products = [
+    ...(await loadLocalProductFeatures(root, "builtUpA_v1.json", summary)),
+    ...(await loadLocalProductFeatures(root, "areaOfInterestA_v1.json", summary)),
+  ];
+  const zones: DamageZoneRecord[] = [];
+  const seenZones = new Set<string>();
+
+  for (const product of products) {
+    const activationId = options.event ?? activationFromLocalFile(product.file, "EMS");
+    summary.fetched += product.features.length;
+    for (let index = 0; index < product.features.length; index += 1) {
+      const zone = emsAreaFeatureToZone(product.features[index], activationId, index);
+      if (!zone) {
+        summary.skipped += 1;
+        continue;
+      }
+      const zoneKey = `${zone.sourceName}:${zone.sourceId}`;
+      if (seenZones.has(zoneKey)) {
+        summary.skipped += 1;
+        continue;
+      }
+      seenZones.add(zoneKey);
+      zones.push(zone);
+    }
+  }
+
+  summary.zones = zones.length;
+  if (options.dryRun) {
+    progress(`Zonas locales (dry-run): ${zones.length} zonas preparadas.`);
+    return;
+  }
+  const now = new Date().toISOString();
+  const statements = zones.map((zone) => zoneUpsertSql(zone, now));
+  if (statements.length) await d1ExecFile(target, statements.join("\n"));
+}
+
+function featuresFromUnknownGeoJson(data: unknown): GeoJSONFeature[] {
+  if (!data || typeof data !== "object") return [];
+  const record = data as Record<string, unknown>;
+  if (Array.isArray(record.features)) return record.features as GeoJSONFeature[];
+  if (record.type === "Feature") return [record as GeoJSONFeature];
+  return [];
+}
+
+async function loadGeoJson(src: string): Promise<unknown> {
+  let text: string;
+  if (/^https?:\/\//i.test(src)) {
+    progress(`Descargando ${src}`);
+    const response = await fetchWithTimeout(src, {
+      headers: { Accept: "application/json, application/geo+json" },
+    });
+    if (!response.ok) throw new Error(`${src} respondió ${response.status}.`);
+    text = await response.text();
+  } else {
+    progress(`Leyendo archivo local ${src}`);
+    text = await readFile(src, "utf8");
+  }
+  return JSON.parse(text) as unknown;
+}
+
+function findUsgsShakeMapGeoJsonUrl(event: unknown): string | null {
+  if (!event || typeof event !== "object") return null;
+  const products = (event as { properties?: { products?: Record<string, unknown[]> } })
+    .properties?.products;
+  const shakemaps = products?.shakemap;
+  const shakemap = Array.isArray(shakemaps) ? shakemaps[0] : null;
+  const contents = (shakemap as { contents?: Record<string, { url?: string }> } | null)
+    ?.contents;
+  if (!contents) return null;
+  const candidates = Object.entries(contents)
+    .filter(([key, value]) => {
+      const haystack = `${key} ${value.url ?? ""}`.toLowerCase();
+      return (
+        haystack.endsWith(".json") &&
+        (haystack.includes("cont_mi") ||
+          haystack.includes("mmi") ||
+          haystack.includes("intensity") ||
+          haystack.includes("shape"))
+      );
+    })
+    .map(([, value]) => value.url)
+    .filter((url): url is string => Boolean(url));
+  return candidates[0] ?? null;
+}
+
+async function runUsgsTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const eventId = options.eventId ?? options.event ?? "usgs-event";
+  let src = options.usgsUrl;
+  if (!src) {
+    if (!options.eventId) {
+      throw new Error("Tier usgs requiere --event-id <id> o --usgs-url <GeoJSON>.");
+    }
+    const detailUrl = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&eventid=${encodeURIComponent(
+      options.eventId,
+    )}`;
+    const detail = await loadGeoJson(detailUrl);
+    src = findUsgsShakeMapGeoJsonUrl(detail) ?? undefined;
+    if (!src) {
+      summary.warnings.push(`USGS ${options.eventId}: sin GeoJSON ShakeMap usable.`);
+      return;
+    }
+  }
+
+  const data = await loadGeoJson(src);
+  const features = featuresFromUnknownGeoJson(data);
+  summary.fetched = features.length;
+  const zones = features
+    .map((feature, index) => shakemapFeatureToZone(feature, eventId, index))
+    .filter((zone): zone is DamageZoneRecord => Boolean(zone));
+  summary.zones = zones.length;
+  summary.skipped = features.length - zones.length;
+
+  if (options.dryRun) {
+    progress(`USGS (dry-run): ${zones.length} zonas preparadas.`);
+    return;
+  }
+  const now = new Date().toISOString();
+  const statements = zones.map((zone) => zoneUpsertSql(zone, now));
+  if (statements.length) await d1ExecFile(target, statements.join("\n"));
+}
+
+async function runGdacsTier(
+  target: WranglerTarget,
+  options: CliOptions,
+  summary: Summary,
+) {
+  const src = options.gdacsUrl;
+  if (!src) {
+    throw new Error("Tier gdacs requiere --gdacs-url <GeoJSON de GDACS>.");
+  }
+  const eventId = options.eventId ?? options.event ?? "gdacs-event";
+  const data = await loadGeoJson(src);
+  const features = featuresFromUnknownGeoJson(data);
+  summary.fetched = features.length;
+  const zones = features
+    .map((feature, index) => gdacsFeatureToZone(feature, eventId, index))
+    .filter((zone): zone is DamageZoneRecord => Boolean(zone));
+  summary.zones = zones.length;
+  summary.skipped = features.length - zones.length;
+
+  if (options.dryRun) {
+    progress(`GDACS (dry-run): ${zones.length} zonas preparadas.`);
     return;
   }
   const now = new Date().toISOString();
@@ -522,9 +905,17 @@ async function main() {
   progress(`Tier ${options.tier} | env=${options.env} | ${options.dryRun ? "dry-run" : "write"}`);
 
   if (options.tier === "ems") await runEmsTier(target, options, summary);
+  else if (options.tier === "ems-local")
+    await runEmsLocalTier(target, options, summary);
   else if (options.tier === "ems-zones")
     await runEmsZonesTier(target, options, summary);
+  else if (options.tier === "zones-local")
+    await runZonesLocalTier(target, options, summary);
+  else if (options.tier === "candidates")
+    await runCandidatesTier(target, options, summary);
   else if (options.tier === "sar") await runSarTier(target, options, summary);
+  else if (options.tier === "usgs") await runUsgsTier(target, options, summary);
+  else if (options.tier === "gdacs") await runGdacsTier(target, options, summary);
   else await runMaxarTier(target, options, summary);
 
   console.log(

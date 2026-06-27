@@ -5,10 +5,13 @@ import {
   categorizeEmsArea,
   categorizeZoneScore,
   emsAreaFeatureToZone,
+  gdacsFeatureToZone,
   haversineMeters,
   mapEmsGrade,
+  normalizeEmsCandidateFeature,
   normalizeEmsFeature,
   rasterToDamageZones,
+  shakemapFeatureToZone,
   type GeoJSONFeature,
 } from "./import-satellite";
 
@@ -26,8 +29,20 @@ describe("mapEmsGrade", () => {
       damageType: "collapse",
       keep: true,
     });
+    expect(mapEmsGrade("Destroyed")).toEqual({
+      damageType: "collapse",
+      keep: true,
+    });
+    expect(mapEmsGrade("Damaged")).toEqual({
+      damageType: "severe",
+      keep: true,
+    });
     expect(mapEmsGrade("Highly Damaged").damageType).toBe("severe");
     expect(mapEmsGrade("Moderately Damaged").damageType).toBe("moderate");
+    expect(mapEmsGrade("Grade 4").damageType).toBe("severe");
+    expect(mapEmsGrade("G5").damageType).toBe("collapse");
+    expect(mapEmsGrade("D3").damageType).toBe("severe");
+    expect(mapEmsGrade("Heavy damage").damageType).toBe("severe");
     expect(mapEmsGrade("Negligible to slight").keep).toBe(false);
     expect(mapEmsGrade("Possibly damaged").keep).toBe(false);
   });
@@ -96,6 +111,20 @@ describe("normalizeEmsFeature", () => {
     );
     expect("skipped" in low).toBe(true);
   });
+
+  it("normalizes possibly damaged features as manual candidates", () => {
+    const result = normalizeEmsCandidateFeature(
+      { ...feature, properties: { damage_gra: "Possibly damaged", city: "Caracas" } },
+      "EMSR999",
+    );
+    expect("skipped" in result).toBe(false);
+    if ("skipped" in result) return;
+    expect(result.sourceName).toBe("copernicus-ems");
+    expect(result.sourceId).toBe("EMSR999:42");
+    expect(result.suggestedDamageType).toBe("moderate");
+    expect(result.score).toBe(0.55);
+    expect(result.city).toBe("Caracas");
+  });
 });
 
 describe("EMS area zones", () => {
@@ -104,6 +133,7 @@ describe("EMS area zones", () => {
       damageCategory: "severe",
       score: 0.95,
     });
+    expect(categorizeEmsArea("Grade 4").damageCategory).toBe("high");
     expect(categorizeEmsArea("Moderately Damaged").damageCategory).toBe("moderate");
     expect(categorizeEmsArea("Negligible").damageCategory).toBe("low");
   });
@@ -163,5 +193,51 @@ describe("rasterToDamageZones", () => {
     // geometry parses to a valid GeoJSON polygon
     const geo = JSON.parse(hot!.geometry) as { type: string };
     expect(geo.type).toBe("Polygon");
+  });
+});
+
+describe("external impact zones", () => {
+  const polygon: GeoJSONFeature["geometry"] = {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-68.04, 10.45],
+        [-67.98, 10.45],
+        [-67.98, 10.49],
+        [-68.04, 10.49],
+        [-68.04, 10.45],
+      ],
+    ],
+  };
+
+  it("converts USGS ShakeMap intensity polygons to damage zones", () => {
+    const zone = shakemapFeatureToZone(
+      {
+        type: "Feature",
+        geometry: polygon,
+        properties: { mmi: 8 },
+      },
+      "us-test",
+      3,
+    );
+    expect(zone).not.toBeNull();
+    expect(zone!.sourceName).toBe("usgs-shakemap");
+    expect(zone!.damageCategory).toBe("severe");
+    expect(zone!.score).toBe(0.8);
+  });
+
+  it("converts GDACS impact polygons to contextual damage zones", () => {
+    const zone = gdacsFeatureToZone(
+      {
+        type: "Feature",
+        geometry: polygon,
+        properties: { alertlevel: "Orange" },
+      },
+      "gdacs-test",
+      1,
+    );
+    expect(zone).not.toBeNull();
+    expect(zone!.sourceName).toBe("gdacs");
+    expect(zone!.damageCategory).toBe("high");
   });
 });

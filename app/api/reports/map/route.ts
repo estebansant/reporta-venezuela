@@ -32,6 +32,12 @@ interface MapReportRow {
   chip_image_id: string | null;
 }
 
+function isMissingSchemaError(error: unknown, fragments: string[]) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return fragments.some((fragment) => message.includes(fragment.toLowerCase()));
+}
+
 function errorResponse(message: string, status: number, fields?: unknown) {
   return Response.json(
     { error: message, fields },
@@ -118,18 +124,42 @@ export async function GET(request: Request) {
     bindings.push(query.south, query.north, query.west, query.east);
   }
 
-  const result = await DB.prepare(
-    `SELECT r.id, r.building_name, r.address, r.state, r.city, r.latitude,
-      r.longitude, r.damage_type, r.needs_help, r.created_at,
-      r.verified_by_satellite, i.id AS chip_image_id
-     FROM reports r
-     LEFT JOIN report_images i ON i.report_id = r.id AND i.position = 0
-     WHERE ${filters.join(" AND ")}
-     ORDER BY r.created_at DESC
-     LIMIT ?`,
-  )
-    .bind(...bindings, query.limit)
-    .all<MapReportRow>();
+  let result;
+  try {
+    result = await DB.prepare(
+      `SELECT r.id, r.building_name, r.address, r.state, r.city, r.latitude,
+        r.longitude, r.damage_type, r.needs_help, r.created_at,
+        r.verified_by_satellite, i.id AS chip_image_id
+       FROM reports r
+       LEFT JOIN report_images i ON i.report_id = r.id AND i.position = 0
+       WHERE ${filters.join(" AND ")}
+       ORDER BY r.created_at DESC
+       LIMIT ?`,
+    )
+      .bind(...bindings, query.limit)
+      .all<MapReportRow>();
+  } catch (error) {
+    const canFallback =
+      !query.verifiedBySatellite &&
+      isMissingSchemaError(error, [
+        "no such column: r.verified_by_satellite",
+        "no such column: verified_by_satellite",
+      ]);
+
+    if (!canFallback) throw error;
+
+    result = await DB.prepare(
+      `SELECT r.id, r.building_name, r.address, r.state, r.city, r.latitude,
+        r.longitude, r.damage_type, r.needs_help, r.created_at,
+        0 AS verified_by_satellite, NULL AS chip_image_id
+       FROM reports r
+       WHERE ${filters.join(" AND ")}
+       ORDER BY r.created_at DESC
+       LIMIT ?`,
+    )
+      .bind(...bindings, query.limit)
+      .all<MapReportRow>();
+  }
 
   return Response.json(
     { reports: groupMapReports(result.results.map(rowToMapReport)) },

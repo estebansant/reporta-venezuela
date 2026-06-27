@@ -25,6 +25,11 @@ interface DamageZoneRow {
   acquired_at: string | null;
 }
 
+function isMissingDamageZonesTable(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("no such table: damage_zones");
+}
+
 function errorResponse(message: string, status: number, fields?: unknown) {
   return Response.json(
     { error: message, fields },
@@ -83,15 +88,21 @@ export async function GET(request: Request) {
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-  const result = await DB.prepare(
-    `SELECT id, geometry, damage_category, score, source_name, acquired_at
-     FROM damage_zones
-     ${whereClause}
-     ORDER BY score DESC
-     LIMIT ?`,
-  )
-    .bind(...bindings, query.limit)
-    .all<DamageZoneRow>();
+  let result;
+  try {
+    result = await DB.prepare(
+      `SELECT id, geometry, damage_category, score, source_name, acquired_at
+       FROM damage_zones
+       ${whereClause}
+       ORDER BY score DESC
+       LIMIT ?`,
+    )
+      .bind(...bindings, query.limit)
+      .all<DamageZoneRow>();
+  } catch (error) {
+    if (!isMissingDamageZonesTable(error)) throw error;
+    result = { results: [] as DamageZoneRow[] };
+  }
 
   return Response.json(
     { zones: result.results.map(rowToZone) },

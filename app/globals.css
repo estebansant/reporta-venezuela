@@ -255,10 +255,11 @@ a {
   box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
 }
 .map-legend {
-  top: 1rem;
+  top: 5rem;
   left: 1rem;
   min-width: 205px;
   padding: 0.9rem 1rem;
+  pointer-events: none;
 }
 .map-legend p {
   margin: 0 0 0.65rem;
@@ -276,6 +277,15 @@ a {
   border: 2px solid var(--cream-paper);
   border-radius: 50%;
   outline: 1px solid currentColor;
+}
+.damage-zone-legend {
+  color: var(--ink);
+}
+.damage-zone-swatch {
+  background: color-mix(in srgb, var(--zone-color) 45%, transparent);
+  border-color: color-mix(in srgb, var(--cream-paper) 75%, transparent) !important;
+  border-radius: 3px !important;
+  outline-color: var(--zone-color) !important;
 }
 .map-empty {
   position: absolute;
@@ -1697,7 +1707,7 @@ footer nav {
     max-height: 680px;
   }
   .map-legend {
-    top: 0.75rem;
+    top: 4.5rem;
     left: 0.75rem;
     min-width: 180px;
     padding: 0.7rem 0.8rem;

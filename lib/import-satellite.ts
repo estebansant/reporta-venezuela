@@ -5,6 +5,8 @@ export type VerifiedSource = "copernicus-ems" | "maxar-opendata" | "sar-dpm";
 
 export const COPERNICUS_EMS_SOURCE: VerifiedSource = "copernicus-ems";
 export const ARIA_DPM_SOURCE = "aria-dpm";
+export const USGS_SHAKEMAP_SOURCE = "usgs-shakemap";
+export const GDACS_SOURCE = "gdacs";
 
 export const AUTOTAG_RADIUS_M = 15;
 // ≈15 m of latitude in degrees. Longitude is padded by /cos(lat) at call sites.
@@ -52,6 +54,18 @@ export interface GeoJSONFeature {
   properties?: Record<string, unknown> | null;
 }
 
+export interface NormalizedSatelliteCandidate {
+  sourceName: string;
+  sourceId: string;
+  latitude: number;
+  longitude: number;
+  suggestedDamageType: DamageType;
+  score: number | null;
+  state: string | null;
+  city: string | null;
+  note: string | null;
+}
+
 /**
  * Map an EMS-98 damage grade (numeric 1..5 or a Copernicus text label) to the
  * app's existing DamageType. `keep === false` means the feature is below the
@@ -80,17 +94,49 @@ export function mapEmsGrade(grade: string | number | null | undefined): {
     .toLowerCase()
     .trim();
 
+  const gradeMatch = label.match(/\b(?:grade|ems|dmg|damage|g|d)\s*[-_:]?\s*([0-5])\b/);
+  if (gradeMatch) {
+    return mapEmsGrade(Number(gradeMatch[1]));
+  }
+
+  if (/(possibly|possible|probable|potential)/.test(label)) {
+    return { damageType: "moderate", keep: false };
+  }
   if (/(completely destroyed|destroyed|collapse|total)/.test(label)) {
     return { damageType: "collapse", keep: true };
   }
-  if (/(highly|very heavy|heavily|grave|severe|severo)/.test(label)) {
+  if (/(highly|heavy|heavily|very heavy|grave|severe|severo)/.test(label)) {
     return { damageType: "severe", keep: true };
   }
   if (/(moderate|substantial|partial|parcial)/.test(label)) {
     return { damageType: "moderate", keep: true };
   }
+  if (/^damaged$|[^a-z]damaged$|damage observed|dano|daño/.test(label)) {
+    return { damageType: "severe", keep: true };
+  }
   // negligible / slight / possibly damaged / not applicable / unknown
   return { damageType: "moderate", keep: false };
+}
+
+function mapEmsCandidateGrade(
+  grade: string | number | null | undefined,
+): { damageType: DamageType; score: number; review: boolean } {
+  const mapped = mapEmsGrade(grade);
+  if (mapped.keep) {
+    const score =
+      mapped.damageType === "collapse" ? 0.95 : mapped.damageType === "severe" ? 0.88 : 0.72;
+    return { damageType: mapped.damageType, score, review: false };
+  }
+
+  const label = String(grade ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+  if (/(possibly|possible|probable|potential)/.test(label)) {
+    return { damageType: "moderate", score: 0.55, review: true };
+  }
+  return { damageType: "moderate", score: 0.35, review: true };
 }
 
 function readProperty(
@@ -156,16 +202,76 @@ function truncate(value: string, max: number) {
   return value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
 }
 
+export function normalizeEmsCandidateFeature(
+  feature: GeoJSONFeature,
+  activationId: string,
+  featureIndex?: number,
+): NormalizedSatelliteCandidate | { skipped: true; reason: string; sourceId: string } {
+  const props = feature.properties ?? {};
+  const rawFeatureId =
+    readProperty(props, ["obj_id", "objectid", "fid", "id", "gid"]) ??
+    (feature.id !== undefined && feature.id !== null ? String(feature.id) : undefined) ??
+    (featureIndex !== undefined ? String(featureIndex) : undefined);
+  const sourceId = `${activationId}:${rawFeatureId ?? "unknown"}`;
+  const gradeRaw =
+    readProperty(props, [
+      "grading",
+      "damage_gra",
+      "dmg_src_id",
+      "damage",
+      "grade",
+      "obj_dmg",
+      "notation",
+      "dmg",
+    ]) ?? null;
+  const mapped = mapEmsCandidateGrade(gradeRaw);
+  if (!mapped.review || mapped.score < 0.5) {
+    return {
+      skipped: true,
+      reason: `No requiere revisión manual ("${gradeRaw ?? "desconocido"}").`,
+      sourceId,
+    };
+  }
+
+  const centroid = geometryCentroid(feature.geometry);
+  if (!centroid) {
+    return { skipped: true, reason: "Sin geometría válida.", sourceId };
+  }
+
+  const city =
+    readProperty(props, ["city", "place", "town", "municipality", "localidad"]) ??
+    null;
+  const addressProp = readProperty(props, ["address", "street", "direccion"]);
+  const state =
+    readProperty(props, ["state", "estado", "admin1", "province"]) ??
+    inferState({ address: addressProp ?? null, city, zone: null });
+  const name = readProperty(props, ["name", "building", "label", "nombre"]);
+
+  return {
+    sourceName: COPERNICUS_EMS_SOURCE,
+    sourceId,
+    latitude: centroid.latitude,
+    longitude: centroid.longitude,
+    suggestedDamageType: mapped.damageType,
+    score: mapped.score,
+    state: state || null,
+    city: city ? truncate(city, 120) : null,
+    note: truncate(name && name !== "Unknown" ? name : "Posible daño detectado por satélite", 240),
+  };
+}
+
 export function normalizeEmsFeature(
   feature: GeoJSONFeature,
   activationId: string,
+  featureIndex?: number,
 ):
   | NormalizedSatelliteReport
   | { skipped: true; reason: string; sourceId: string } {
   const props = feature.properties ?? {};
   const rawFeatureId =
     readProperty(props, ["obj_id", "objectid", "fid", "id", "gid"]) ??
-    (feature.id !== undefined ? String(feature.id) : undefined);
+    (feature.id !== undefined && feature.id !== null ? String(feature.id) : undefined) ??
+    (featureIndex !== undefined ? String(featureIndex) : undefined);
   const sourceId = `${activationId}:${rawFeatureId ?? "unknown"}`;
 
   const gradeRaw =
@@ -285,6 +391,7 @@ export function categorizeEmsArea(grade: string | number | null | undefined): {
 export function emsAreaFeatureToZone(
   feature: GeoJSONFeature,
   activationId: string,
+  featureIndex?: number,
 ): DamageZoneRecord | null {
   if (!feature.geometry) return null;
   const bounds = geometryBounds(feature.geometry);
@@ -294,7 +401,8 @@ export function emsAreaFeatureToZone(
   const props = feature.properties ?? {};
   const rawFeatureId =
     readProperty(props, ["obj_id", "objectid", "fid", "id", "gid", "area_id"]) ??
-    (feature.id !== undefined ? String(feature.id) : "unknown");
+    (feature.id !== undefined ? String(feature.id) : undefined) ??
+    (featureIndex !== undefined ? String(featureIndex) : "unknown");
   const gradeRaw =
     readProperty(props, [
       "grading",
@@ -333,6 +441,104 @@ export function categorizeZoneScore(
   if (score >= 0.7) return "high";
   if (score >= 0.55) return "moderate";
   return "low";
+}
+
+export function intensityToDamageCategory(
+  value: number,
+): DamageZoneRecord["damageCategory"] {
+  if (value >= 8) return "severe";
+  if (value >= 7) return "high";
+  if (value >= 6) return "moderate";
+  return "low";
+}
+
+export function intensityToScore(value: number): number {
+  return Math.min(1, Math.max(0.4, value / 10));
+}
+
+export function shakemapFeatureToZone(
+  feature: GeoJSONFeature,
+  eventId: string,
+  featureIndex = 0,
+): DamageZoneRecord | null {
+  if (!feature.geometry) return null;
+  const bounds = geometryBounds(feature.geometry);
+  const centroid = geometryCentroid(feature.geometry);
+  if (!bounds || !centroid) return null;
+  const props = feature.properties ?? {};
+  const rawIntensity =
+    readProperty(props, ["mmi", "value", "grid_value", "intensity", "paramvalue"]) ??
+    readProperty(props, ["pga", "pgv"]);
+  const value = Number(rawIntensity);
+  if (!Number.isFinite(value) || value < 4) return null;
+  const idPart =
+    readProperty(props, ["id", "objectid", "fid", "value"]) ?? String(featureIndex);
+  const score = intensityToScore(value);
+
+  return {
+    id: `${USGS_SHAKEMAP_SOURCE}:${eventId}:${idPart}`,
+    geometry: JSON.stringify(feature.geometry),
+    minLat: bounds.minLat,
+    maxLat: bounds.maxLat,
+    minLng: bounds.minLng,
+    maxLng: bounds.maxLng,
+    centroidLat: centroid.latitude,
+    centroidLng: centroid.longitude,
+    damageCategory: intensityToDamageCategory(value),
+    score,
+    sourceName: USGS_SHAKEMAP_SOURCE,
+    sourceId: `${eventId}:${idPart}`,
+    acquiredAt: null,
+  };
+}
+
+export function gdacsFeatureToZone(
+  feature: GeoJSONFeature,
+  eventId: string,
+  featureIndex = 0,
+): DamageZoneRecord | null {
+  if (!feature.geometry) return null;
+  const bounds = geometryBounds(feature.geometry);
+  const centroid = geometryCentroid(feature.geometry);
+  if (!bounds || !centroid) return null;
+  const props = feature.properties ?? {};
+  const rawScore =
+    readProperty(props, ["score", "severity", "alert_score", "population", "exposure"]) ??
+    readProperty(props, ["value", "impact"]);
+  const numericScore = Number(rawScore);
+  const label = (
+    readProperty(props, ["alertlevel", "alert_level", "severity", "class"]) ?? ""
+  )
+    .toLowerCase()
+    .trim();
+  const score = Number.isFinite(numericScore)
+    ? Math.min(1, Math.max(0.4, numericScore > 1 ? numericScore / 10 : numericScore))
+    : label.includes("red")
+      ? 0.95
+      : label.includes("orange")
+        ? 0.8
+        : label.includes("yellow")
+          ? 0.6
+          : 0.45;
+  const idPart =
+    readProperty(props, ["id", "objectid", "fid", "eventid", "event_id"]) ??
+    String(featureIndex);
+
+  return {
+    id: `${GDACS_SOURCE}:${eventId}:${idPart}`,
+    geometry: JSON.stringify(feature.geometry),
+    minLat: bounds.minLat,
+    maxLat: bounds.maxLat,
+    minLng: bounds.minLng,
+    maxLng: bounds.maxLng,
+    centroidLat: centroid.latitude,
+    centroidLng: centroid.longitude,
+    damageCategory: categorizeZoneScore(score),
+    score,
+    sourceName: GDACS_SOURCE,
+    sourceId: `${eventId}:${idPart}`,
+    acquiredAt: null,
+  };
 }
 
 /**

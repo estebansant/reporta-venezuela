@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import type { CSSProperties } from "react";
 import {
   MapContainer,
   Marker,
@@ -41,12 +42,15 @@ const zoneColors: Record<DamageZoneCategory, string> = {
   severe: "#7f1d1d",
 };
 
-const zoneCategoryLabels: Record<DamageZoneCategory, string> = {
-  low: "bajo",
-  moderate: "moderado",
-  high: "alto",
-  severe: "severo",
-};
+const damageZoneLegendItems: {
+  category: DamageZoneCategory;
+  label: string;
+}[] = [
+  { category: "low", label: "Daño bajo" },
+  { category: "moderate", label: "Daño moderado" },
+  { category: "high", label: "Daño alto" },
+  { category: "severe", label: "Daño severo" },
+];
 
 // Exact lucide "satellite-dish" paths (24x24 viewBox), reused for the canvas pin.
 const satelliteDishPaths = [
@@ -307,6 +311,15 @@ function DamageZonesLayer() {
   const map = useMap();
 
   useEffect(() => {
+    if (!map.getPane("damage-zones")) {
+      map.createPane("damage-zones");
+    }
+    const pane = map.getPane("damage-zones");
+    if (pane) {
+      pane.style.zIndex = "350";
+      pane.style.pointerEvents = "none";
+    }
+
     const layer = L.layerGroup().addTo(map);
     let aborted = false;
 
@@ -329,6 +342,8 @@ function DamageZonesLayer() {
           if (!zone.geometry) continue;
           const color = zoneColors[zone.damageCategory];
           const shape = L.geoJSON(zone.geometry as GeoJSON.GeoJsonObject, {
+            interactive: false,
+            pane: "damage-zones",
             style: {
               color,
               weight: 1,
@@ -337,10 +352,6 @@ function DamageZonesLayer() {
               fillOpacity: 0.25,
             },
           });
-          shape.bindTooltip(
-            `Zona de daño: ${zoneCategoryLabels[zone.damageCategory]}`,
-            { sticky: true },
-          );
           shape.addTo(layer);
         }
       } catch {
@@ -359,6 +370,24 @@ function DamageZonesLayer() {
   }, [map]);
 
   return null;
+}
+
+function DamageZonesLegend() {
+  return (
+    <div className="map-legend damage-zone-legend" aria-label="Leyenda de zonas de daño">
+      <p>Zonas Copernicus EMS</p>
+      {damageZoneLegendItems.map((item) => (
+        <div key={item.category}>
+          <span
+            className="damage-zone-swatch"
+            style={{ "--zone-color": zoneColors[item.category] } as CSSProperties}
+            aria-hidden="true"
+          />
+          {item.label}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function MapEvents({
@@ -448,6 +477,7 @@ export function DamageMap({
       <FlyToSelection position={selectedPosition} />
       <DamageZonesLayer />
       <DamageReportsCanvasLayer reports={reports} />
+      <DamageZonesLegend />
       {selectedPosition ? (
         <Marker
           position={[selectedPosition.latitude, selectedPosition.longitude]}

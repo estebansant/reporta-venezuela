@@ -79,22 +79,33 @@ export async function runWrangler(
   args: string[],
   options: { inputFile?: string } = {},
 ) {
-  const { stdout, stderr } = await execFileAsync(
-    "pnpm",
-    ["exec", "wrangler", ...args],
-    {
-      env: {
-        ...process.env,
-        NO_COLOR: "1",
-        WRANGLER_LOG_PATH: path.join(tmpdir(), "wrangler-satellite.log"),
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      "pnpm",
+      ["exec", "wrangler", ...args],
+      {
+        env: {
+          ...process.env,
+          NO_COLOR: "1",
+          WRANGLER_LOG_PATH: path.join(tmpdir(), "wrangler-satellite.log"),
+        },
+        maxBuffer: 20 * 1024 * 1024,
       },
-      maxBuffer: 20 * 1024 * 1024,
-    },
-  );
-  if (stderr.trim() && !options.inputFile) {
-    process.stderr.write(stderr);
+    );
+    if (stderr.trim() && !options.inputFile) {
+      process.stderr.write(stderr);
+    }
+    return stdout;
+  } catch (error) {
+    const failed = error as {
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
+    if (failed.stdout?.trim()) process.stderr.write(`${failed.stdout}\n`);
+    if (failed.stderr?.trim()) process.stderr.write(`${failed.stderr}\n`);
+    throw new Error(failed.message ?? "Wrangler falló.");
   }
-  return stdout;
 }
 
 export async function d1Json<T = unknown>(

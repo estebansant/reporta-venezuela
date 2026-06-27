@@ -17,7 +17,9 @@ type MockMapRow = {
 
 const mocks = vi.hoisted(() => ({
   sql: "",
+  sqls: [] as string[],
   bindings: [] as (string | number)[],
+  failFirstQueryWith: null as Error | null,
   results: [
     {
       id: "report-1",
@@ -41,11 +43,28 @@ vi.mock("@/lib/cloudflare", () => ({
     DB: {
       prepare(sql: string) {
         mocks.sql = sql;
+        mocks.sqls.push(sql);
         return {
           bind(...bindings: (string | number)[]) {
             mocks.bindings = bindings;
             return {
-              all: async () => ({ results: mocks.results }),
+              all: async () => {
+                if (mocks.failFirstQueryWith) {
+                  const error = mocks.failFirstQueryWith;
+                  mocks.failFirstQueryWith = null;
+                  throw error;
+                }
+                if (sql.includes("0 AS verified_by_satellite")) {
+                  return {
+                    results: mocks.results.map((row) => ({
+                      ...row,
+                      verified_by_satellite: 0,
+                      chip_image_id: null,
+                    })),
+                  };
+                }
+                return { results: mocks.results };
+              },
             };
           },
         };
@@ -71,7 +90,32 @@ vi.mock("@/lib/report-schema", async () => {
 import { GET } from "./route";
 
 describe("/api/reports/map", () => {
+  it("falls back to a legacy query when satellite columns are missing", async () => {
+    mocks.sqls = [];
+    mocks.failFirstQueryWith = new Error(
+      "D1_ERROR: no such column: r.verified_by_satellite",
+    );
+
+    const response = await GET(
+      new Request("https://example.com/api/reports/map?north=11&south=10&east=-66&west=-67"),
+    );
+    const body = (await response.json()) as { reports: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(mocks.sqls).toHaveLength(2);
+    expect(mocks.sqls[0]).toContain("r.verified_by_satellite");
+    expect(mocks.sqls[1]).not.toContain("LEFT JOIN report_images i");
+    expect(mocks.sqls[1]).toContain("0 AS verified_by_satellite");
+    expect(body.reports[0]).toMatchObject({
+      kind: "single",
+      verifiedBySatellite: false,
+      verifiedChipUrl: null,
+    });
+  });
+
   it("returns cacheable minimal map reports for the requested viewport", async () => {
+    mocks.sqls = [];
+    mocks.failFirstQueryWith = null;
     const response = await GET(
       new Request(
         "https://example.com/api/reports/map?north=11&south=10&east=-66&west=-67&state=Distrito%20Capital&damageType=severe&damageType=collapse&search=Acacias",
@@ -123,6 +167,8 @@ describe("/api/reports/map", () => {
   });
 
   it("groups nearby reports into a single map incident", async () => {
+    mocks.sqls = [];
+    mocks.failFirstQueryWith = null;
     mocks.results = [
       {
         id: "report-a",

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   sql: "",
   bindings: [] as (string | number)[],
+  error: null as Error | null,
   results: [
     {
       id: "aria-dpm:TEST:0:0",
@@ -35,7 +36,14 @@ vi.mock("@/lib/cloudflare", () => ({
           bind(...bindings: (string | number)[]) {
             mocks.bindings = bindings;
             return {
-              all: async () => ({ results: mocks.results }),
+              all: async () => {
+                if (mocks.error) {
+                  const error = mocks.error;
+                  mocks.error = null;
+                  throw error;
+                }
+                return { results: mocks.results };
+              },
             };
           },
         };
@@ -61,7 +69,20 @@ vi.mock("@/lib/report-schema", async () => {
 import { GET } from "./route";
 
 describe("/api/zones", () => {
+  it("returns an empty list when the damage_zones table is not available yet", async () => {
+    mocks.error = new Error("D1_ERROR: no such table: damage_zones");
+
+    const response = await GET(
+      new Request("https://example.com/api/zones?north=11&south=10&east=-66&west=-68"),
+    );
+    const body = (await response.json()) as { zones: unknown[] };
+
+    expect(response.status).toBe(200);
+    expect(body.zones).toEqual([]);
+  });
+
   it("filters by viewport bbox and parses geometry to GeoJSON", async () => {
+    mocks.error = null;
     const response = await GET(
       new Request(
         "https://example.com/api/zones?north=11&south=10&east=-66&west=-68",
