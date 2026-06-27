@@ -274,7 +274,8 @@ a {
 .map-overlay-stack {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: end;
+  justify-content: end;
   gap: 0.55rem;
   width: max-content;
   pointer-events: auto;
@@ -311,7 +312,11 @@ a {
 }
 .damage-zone-swatch {
   background: color-mix(in srgb, var(--zone-color) 45%, transparent);
-  border-color: color-mix(in srgb, var(--cream-paper) 75%, transparent) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--cream-paper) 75%,
+    transparent
+  ) !important;
   border-radius: 3px !important;
   outline-color: var(--zone-color) !important;
 }
